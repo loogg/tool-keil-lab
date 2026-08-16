@@ -133,7 +133,7 @@ function ByteGrid({ layout }) {
   const rows = []
   for (let i = 0; i < layout.bytes.length; i += BYTE_COLS) rows.push(layout.bytes.slice(i, i + BYTE_COLS))
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5 overflow-x-auto">
       {rows.map((row, r) => (
         <div key={r} className="flex items-center gap-1.5">
           <span className="w-9 text-right font-mono text-xs text-muted">{hexOffset(r * BYTE_COLS)}</span>
@@ -274,7 +274,7 @@ export default function StructLabModule() {
           增删成员、调整顺序，切换 packed / aligned —— 网格与统计实时更新
         </p>
         <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-lg border border-line bg-panel p-4">
+          <div className="min-w-0 rounded-lg border border-line bg-panel p-4">
             {members.map((m, i) => (
               <div key={m.id} className="mb-2 flex flex-wrap items-center gap-2">
                 <span className="w-5 text-center font-mono text-xs text-muted">{i}</span>
@@ -352,7 +352,7 @@ export default function StructLabModule() {
               </label>
             </div>
           </div>
-          <div className="rounded-lg border border-line bg-panel p-4">
+          <div className="min-w-0 rounded-lg border border-line bg-panel p-4">
             <ByteGrid layout={layout} />
           </div>
         </div>
