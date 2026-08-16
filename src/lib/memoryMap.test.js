@@ -73,4 +73,32 @@ describe('memoryMap', () => {
     placeItem(m, 'webfs', 'RW_IRAM1')
     expect(m.items.find((i) => i.id === 'webfs').region).toBe('ER_RODATA')
   })
+
+  // scatter 文本"行随 item 走"：行模板跟随 item 的当前 region 归属
+  const block = (sc, region) => {
+    const lines = sc.split('\n')
+    const start = lines.findIndex((l) => l.trimStart().startsWith(region + ' '))
+    const end = lines.indexOf('  }', start)
+    return lines.slice(start, end).join('\n')
+  }
+
+  it('移动 webfs 到 RW_IRAM1 后，其行出现在 RW_IRAM1 块、ER_RODATA 块清空', () => {
+    let m = createDefaultModel()
+    m = placeItem(m, 'webfs', 'RW_IRAM1')
+    const sc = generateScatter(m)
+    expect(block(sc, 'RW_IRAM1')).toContain('webserver_packedfs.o (.rodata.*)')
+    expect(block(sc, 'ER_RODATA')).not.toContain('webserver_packedfs.o')
+    // ER_RODATA 块内没有 item 时只剩区域头与闭合括号
+    const lines = sc.split('\n')
+    const start = lines.findIndex((l) => l.trimStart().startsWith('ER_RODATA '))
+    expect(lines[start + 1]).toBe('  }')
+  })
+
+  it('移动 mongoose 到 RW_CCRAM 后，其行出现在 RW_CCRAM 块内', () => {
+    let m = createDefaultModel()
+    m = placeItem(m, 'mongoose', 'RW_CCRAM')
+    const sc = generateScatter(m)
+    expect(block(sc, 'RW_CCRAM')).toContain('mongoose.o (+RO)')
+    expect(block(sc, 'RW_IRAM1')).not.toContain('mongoose.o')
+  })
 })

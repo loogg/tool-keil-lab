@@ -1,35 +1,48 @@
 const HEX = (n, width) => `0x${n.toString(16).toUpperCase().padStart(width, '0')}`
 
+// 每个 item 的固定行模板（含原有缩进；ccram 为两行）。
+// 行随 item 走：item 移到哪个 region，模板就出现在哪个 region 块内。
+const ITEM_LINES = {
+  reset: ['   *.o (RESET, +First)'],
+  inroot: ['   *(InRoot$$Sections)'],
+  anyro: ['   .ANY (+RO)'],
+  webfs: ['    webserver_packedfs.o (.rodata.*)'],
+  mongoose: ['    mongoose.o (+RO)'],
+  op0715: ['    op0715_*.o (+RO)'],
+  anyrw: ['   .ANY (+RW +ZI)'],
+  ccram: ['    * (.bss.ccram)', '    * (.ccram)'],
+  memp: ['    memp.o (+RW +ZI)'],
+  sdram: ['    * (.bss.sdram.noinit)'],
+}
+
 export function generateScatter(model) {
-  const has = (region, itemId) => model.items.some((i) => i.region === region && i.id === itemId)
+  // 块内顺序 = model.items 的规范顺序（createDefaultModel 保证：
+  // ER_IROM1: reset→inroot→anyro；RW_IRAM1: mongoose→op0715→anyrw；
+  // RW_CCRAM: ccram(两行)→memp；ER_RODATA: webfs；RW_SDRAM_NOINIT: sdram）
+  const linesIn = (regionName) => model.items
+    .filter((i) => i.region === regionName)
+    .flatMap((i) => ITEM_LINES[i.id] ?? [])
+
   const lines = []
   lines.push('LR_IROM1 0x08000000 0x00100000  {    ; load region size_region')
   lines.push('  ER_IROM1 0x08000000 0x000C0000  {  ; load address = execution address')
-  if (has('ER_IROM1', 'reset')) lines.push('   *.o (RESET, +First)')
-  if (has('ER_IROM1', 'inroot')) lines.push('   *(InRoot$$Sections)')
-  if (has('ER_IROM1', 'anyro')) lines.push('   .ANY (+RO)')
+  lines.push(...linesIn('ER_IROM1'))
   lines.push('  }')
   lines.push('')
   lines.push('  ER_RODATA 0x080C0000 FIXED 0x00010000 {')
-  if (has('ER_RODATA', 'webfs')) lines.push('    webserver_packedfs.o (.rodata.*)')
+  lines.push(...linesIn('ER_RODATA'))
   lines.push('  }')
   lines.push('')
   lines.push('  RW_IRAM1 0x20000000 0x00070000  {  ; RW data')
-  if (has('RW_IRAM1', 'mongoose')) lines.push('    mongoose.o (+RO)')
-  if (has('RW_IRAM1', 'op0715')) lines.push('    op0715_*.o (+RO)')
-  if (has('RW_IRAM1', 'anyrw')) lines.push('   .ANY (+RW +ZI)')
+  lines.push(...linesIn('RW_IRAM1'))
   lines.push('  }')
   lines.push('')
   lines.push('  RW_CCRAM 0x10000000 0x10000 {')
-  if (has('RW_CCRAM', 'ccram')) {
-    lines.push('    * (.bss.ccram)')
-    lines.push('    * (.ccram)')
-  }
-  if (has('RW_CCRAM', 'memp')) lines.push('    memp.o (+RW +ZI)')
+  lines.push(...linesIn('RW_CCRAM'))
   lines.push('  }')
   lines.push('')
   lines.push('  RW_SDRAM_NOINIT 0xC0000000 UNINIT 0x2000000 {')
-  if (has('RW_SDRAM_NOINIT', 'sdram')) lines.push('    * (.bss.sdram.noinit)')
+  lines.push(...linesIn('RW_SDRAM_NOINIT'))
   lines.push('  }')
   lines.push('}')
   return lines.join('\n')
