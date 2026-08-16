@@ -49,15 +49,15 @@ export default function ErrnoModule() {
   const [running, setRunning] = useState(false)
   const timersRef = useRef([])
 
-  // 卸载时清掉未执行完的 setTimeout
-  useEffect(() => {
-    const timers = timersRef.current
-    return () => timers.forEach(clearTimeout)
+  // 卸载时清掉未执行完的 setTimeout（直接遍历 ref 的实时数组，不能在挂载时捕获快照）
+  useEffect(() => () => {
+    timersRef.current.forEach(clearTimeout)
+    timersRef.current.length = 0
   }, [])
 
   const clearTimers = () => {
     timersRef.current.forEach(clearTimeout)
-    timersRef.current = []
+    timersRef.current.length = 0
   }
 
   const runDemo = () => {
