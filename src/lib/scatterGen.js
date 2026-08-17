@@ -26,6 +26,139 @@ function customItemLines(item) {
   return [`    ${item.label}`]
 }
 
+// 生成 GCC 链接脚本 (.ld)
+export function generateLd(model) {
+  const lines = []
+  const regions = [...model.regions].sort((a, b) => a.base - b.base)
+
+  // MEMORY 块
+  lines.push('MEMORY')
+  lines.push('{')
+  for (const region of regions) {
+    // 权限位：flash = rx, ram = rwx
+    const perm = region.kind === 'flash' ? 'rx' : 'rwx'
+    const lenHex = `0x${region.maxSize.toString(16).toUpperCase()}`
+    lines.push(`  ${region.name} (${perm}) : ORIGIN = ${HEX(region.base)}, LENGTH = ${lenHex}`)
+  }
+  lines.push('}')
+  lines.push('')
+
+  // SECTIONS 块
+  lines.push('SECTIONS')
+  lines.push('{')
+
+  const lrGroups = {}
+  for (const region of regions) {
+    const lr = region.loadRegion || 'LR_DEFAULT'
+    if (!lrGroups[lr]) lrGroups[lr] = []
+    lrGroups[lr].push(region)
+  }
+
+  for (const [, lrRegions] of Object.entries(lrGroups)) {
+    for (const region of lrRegions) {
+      const items = model.items.filter((i) => i.region === region.name)
+      if (items.length === 0) continue
+
+      // 简化映射：section 名 → ld 段名
+      const sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
+      lines.push(`  ${sectionName} : {`)
+      for (const item of items) {
+        // 尝试从 label 推断 ld 语法
+        if (item.label.includes('RESET')) {
+          lines.push('    KEEP(*(.isr_vector))')
+        } else if (item.label.includes('.ANY')) {
+          if (item.label.includes('+RO')) lines.push('    *(.text*) *(.rodata*)')
+          if (item.label.includes('+RW')) lines.push('    *(.data*)')
+          if (item.label.includes('+ZI')) lines.push('    *(.bss*) *(COMMON)')
+        } else if (item.label.includes('.o')) {
+          // 提取 .o 文件名
+          const match = item.label.match(/([\w.]+)\.o/)
+          if (match) {
+            const name = match[1].replace(/\*/g, '*')
+            lines.push(`    KEEP(*(.text.${name}*))`)
+          }
+        } else if (item.label.startsWith('*')) {
+          lines.push(`    ${item.label}`)
+        } else {
+          lines.push(`    *(.${item.label})`)
+        }
+      }
+      lines.push(`  } > ${region.name}`)
+      lines.push('')
+    }
+  }
+
+  lines.push('}')
+  return lines.join('\n')
+}
+
+// 生成 IAR 配置文件 (.icf)
+export function generateIcf(model) {
+  const lines = []
+  const regions = [...model.regions].sort((a, b) => a.base - b.base)
+
+  // define memory
+  lines.push('define memory mem with size = 4G;')
+  lines.push('')
+
+  // define region
+  for (const region of regions) {
+    const sizeHex = `0x${region.maxSize.toString(16).toUpperCase()}`
+    const attrs = []
+    if (region.attrs.fixed) attrs.push('FIXED')
+    if (region.attrs.uninit) attrs.push('UNINIT')
+    const attrStr = attrs.length > 0 ? ` // ${attrs.join(', ')}` : ''
+    lines.push(`define region ${region.name} = mem:[from ${HEX(region.base)} size ${sizeHex}];${attrStr}`)
+  }
+  lines.push('')
+
+  // place in
+  for (const region of regions) {
+    const items = model.items.filter((i) => i.region === region.name)
+    if (items.length === 0) {
+      // 空 region 默认放置
+      if (region.kind === 'flash') {
+        lines.push(`place in ${region.name} { readonly };`)
+      } else {
+        lines.push(`place in ${region.name} { readwrite };`)
+      }
+    } else {
+      const placements = []
+      for (const item of items) {
+        if (item.label.includes('RESET')) {
+          placements.push('vector')
+        } else if (item.label.includes('.ANY')) {
+          if (item.label.includes('+RO')) placements.push('readonly')
+          if (item.label.includes('+RW')) placements.push('readwrite')
+          if (item.label.includes('+ZI')) placements.push('block ZI')
+        } else if (item.label.includes('.o')) {
+          // 提取 .o 文件名
+          const match = item.label.match(/([\w.]+)\.o/)
+          if (match) {
+            placements.push(`section .text.${match[1]}*`)
+          }
+        } else if (item.label.startsWith('*')) {
+          placements.push(`section ${item.label.replace('*', '').trim()}`)
+        } else {
+          placements.push(`section .${item.label}`)
+        }
+      }
+      lines.push(`place in ${region.name} { ${placements.join(', ')} };`)
+    }
+  }
+
+  // initialize / do not initialize
+  const uninitRegions = regions.filter((r) => r.attrs.uninit)
+  if (uninitRegions.length > 0) {
+    lines.push('')
+    for (const region of uninitRegions) {
+      lines.push(`do not initialize { section .bss.${region.name.toLowerCase()}* };`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
 // 生成 scatter 文本（支持多 LR、UNION）
 export function generateScatter(model) {
   const linesIn = (regionName) => model.items

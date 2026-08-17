@@ -11,7 +11,7 @@ import {
   validateModel,
   PACKEDFS_SECTIONS, selectSections,
 } from '../lib/memoryMap'
-import { generateScatter, parseScatter } from '../lib/scatterGen'
+import { generateScatter, generateLd, generateIcf, parseScatter } from '../lib/scatterGen'
 import { MAP_SAMPLE, MAP_NOTES, LINKER_SYNTAX, SYMBOL_EXAMPLE, atSnippet } from '../data/memoryLab'
 
 // 地址十六进制：8 位补零大写
@@ -702,7 +702,16 @@ export default function MemoryLabModule() {
     <div className="space-y-4">
       <p className="text-xs text-muted">符号：{`Image$$${symbolRegion}$$Base / $$Length`}</p>
       <CodeBlock title="linker_symbols.c" code={SYMBOL_EXAMPLE} />
-      <CodeBlock title={LINKER_SYNTAX[syntaxTab].label} code={LINKER_SYNTAX[syntaxTab].code} />
+      <CodeBlock
+        title={LINKER_SYNTAX[syntaxTab].label}
+        code={
+          syntaxTab === 'sct'
+            ? scatterText
+            : syntaxTab === 'ld'
+            ? generateLd(model)
+            : generateIcf(model)
+        }
+      />
     </div>
   )
 
