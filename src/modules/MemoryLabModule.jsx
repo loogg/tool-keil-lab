@@ -147,16 +147,33 @@ export default function MemoryLabModule() {
   const [addingInSection, setAddingInSection] = useState(null)
   const [newItemLabelInline, setNewItemLabelInline] = useState('')
   const [newItemSizeInline, setNewItemSizeInline] = useState('0x1000')
+  const [newItemAttrsInline, setNewItemAttrsInline] = useState([])
+
+  const SECTION_ATTRS = [
+    { id: '+RO', label: '+RO', desc: '只读' },
+    { id: '+RW', label: '+RW', desc: '读写' },
+    { id: '+ZI', label: '+ZI', desc: '零初始化' },
+    { id: 'RESET', label: 'RESET', desc: '复位向量' },
+    { id: '+First', label: '+First', desc: '放在最前' },
+  ]
 
   const startAddSection = (regionName) => {
     setAddingInSection(regionName)
     setNewItemLabelInline('')
     setNewItemSizeInline('0x1000')
+    setNewItemAttrsInline([])
+  }
+
+  const toggleSectionAttr = (attr) => {
+    setNewItemAttrsInline((prev) =>
+      prev.includes(attr) ? prev.filter((a) => a !== attr) : [...prev, attr]
+    )
   }
 
   const confirmAddSection = (regionName) => {
     if (newItemLabelInline) {
-      setModel(addItem(model, { label: newItemLabelInline, region: regionName, size: parseInt(newItemSizeInline, 16) || 0x1000 }))
+      const attrStr = newItemAttrsInline.length > 0 ? ` (${newItemAttrsInline.join(', ')})` : ''
+      setModel(addItem(model, { label: newItemLabelInline + attrStr, region: regionName, size: parseInt(newItemSizeInline, 16) || 0x1000 }))
     }
     setAddingInSection(null)
   }
@@ -165,17 +182,33 @@ export default function MemoryLabModule() {
   const [newRegionNameInline, setNewRegionNameInline] = useState('')
   const [newRegionBaseInline, setNewRegionBaseInline] = useState('0x20000000')
   const [newRegionSizeInline, setNewRegionSizeInline] = useState('0x10000')
+  const [newRegionAttrsInline, setNewRegionAttrsInline] = useState({ fixed: false, uninit: false })
+
+  const REGION_ATTRS = [
+    { id: 'fixed', label: 'FIXED', desc: '固定绝对地址' },
+    { id: 'uninit', label: 'UNINIT', desc: '不初始化' },
+  ]
 
   const startAddRegion = () => {
     setAddingRegion(true)
     setNewRegionNameInline('')
     setNewRegionBaseInline('0x20000000')
     setNewRegionSizeInline('0x10000')
+    setNewRegionAttrsInline({ fixed: false, uninit: false })
+  }
+
+  const toggleRegionAttr = (attr) => {
+    setNewRegionAttrsInline((prev) => ({ ...prev, [attr]: !prev[attr] }))
   }
 
   const confirmAddRegion = () => {
     if (newRegionNameInline) {
-      setModel(addRegion(model, { name: newRegionNameInline, base: parseInt(newRegionBaseInline, 16), maxSize: parseInt(newRegionSizeInline, 16) }))
+      setModel(addRegion(model, {
+        name: newRegionNameInline,
+        base: parseInt(newRegionBaseInline, 16),
+        maxSize: parseInt(newRegionSizeInline, 16),
+        attrs: newRegionAttrsInline,
+      }))
     }
     setAddingRegion(false)
   }
@@ -283,25 +316,22 @@ export default function MemoryLabModule() {
                           ×
                         </button>
                       </div>
-                      {/* 预设选项 */}
+                      {/* 属性选择 */}
                       <div className="flex flex-wrap gap-1.5">
-                        <span className="text-[10px] text-muted">预设:</span>
-                        {[
-                          { label: '.text', size: '0x4000' },
-                          { label: '.rodata', size: '0x2000' },
-                          { label: '.data', size: '0x1000' },
-                          { label: '.bss', size: '0x2000' },
-                        ].map((preset) => (
+                        <span className="text-[10px] text-muted">属性:</span>
+                        {SECTION_ATTRS.map((attr) => (
                           <button
-                            key={preset.label}
+                            key={attr.id}
                             type="button"
-                            onClick={() => {
-                              setNewItemLabelInline(preset.label)
-                              setNewItemSizeInline(preset.size)
-                            }}
-                            className="text-[10px] px-2 py-0.5 rounded border border-line bg-panel hover:border-accent hover:text-accent transition-colors"
+                            onClick={() => toggleSectionAttr(attr.id)}
+                            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                              newItemAttrsInline.includes(attr.id)
+                                ? 'border-accent bg-accent/20 text-accent'
+                                : 'border-line bg-panel hover:border-accent hover:text-accent'
+                            }`}
+                            title={attr.desc}
                           >
-                            {preset.label} ({preset.size})
+                            {attr.label}
                           </button>
                         ))}
                       </div>
@@ -329,27 +359,24 @@ export default function MemoryLabModule() {
               <TextInput value={newRegionBaseInline} onChange={(e) => setNewRegionBaseInline(e.target.value)} placeholder="base" className="text-xs" />
               <TextInput value={newRegionSizeInline} onChange={(e) => setNewRegionSizeInline(e.target.value)} placeholder="size" className="text-xs" />
             </div>
-            {/* 预设选项 */}
-            <div className="flex flex-wrap gap-1.5">
-              <span className="text-[10px] text-muted">预设:</span>
-              {[
-                { name: 'ER_FLASH', base: '0x08000000', size: '0x40000', note: '256KB Flash' },
-                { name: 'RW_SRAM', base: '0x20000000', size: '0x10000', note: '64KB SRAM' },
-                { name: 'RW_CCRAM', base: '0x10000000', size: '0x10000', note: '64KB CCRAM' },
-                { name: 'RW_SDRAM', base: '0xC0000000', size: '0x100000', note: '1MB SDRAM' },
-              ].map((preset) => (
+            {/* 属性选择 */}
+            <div className="flex flex-wrap gap-2">
+              <span className="text-[10px] text-muted">属性:</span>
+              {REGION_ATTRS.map((attr) => (
                 <button
-                  key={preset.name}
+                  key={attr.id}
                   type="button"
-                  onClick={() => {
-                    setNewRegionNameInline(preset.name)
-                    setNewRegionBaseInline(preset.base)
-                    setNewRegionSizeInline(preset.size)
-                  }}
-                  className="text-[10px] px-2 py-0.5 rounded border border-line bg-panel hover:border-accent hover:text-accent transition-colors"
-                  title={preset.note}
+                  onClick={() => toggleRegionAttr(attr.id)}
+                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                    newRegionAttrsInline[attr.id]
+                      ? attr.id === 'fixed'
+                        ? 'border-warn bg-warn/20 text-warn'
+                        : 'border-accent-2 bg-accent-2/20 text-accent-2'
+                      : 'border-line bg-panel hover:border-accent hover:text-accent'
+                  }`}
+                  title={attr.desc}
                 >
-                  {preset.name} ({preset.note})
+                  {newRegionAttrsInline[attr.id] ? '✓ ' : ''}{attr.label}
                 </button>
               ))}
             </div>
