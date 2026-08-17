@@ -284,8 +284,9 @@ export default function MemoryLabModule() {
 
                   {/* 行内添加 Section */}
                   {addingInSection === region.name ? (
-                    <div className="pl-8 pr-3 py-2 bg-panel-2 space-y-2">
-                      <div className="flex items-center gap-2">
+                    <div className="pl-8 pr-3 py-2 bg-panel-2">
+                      {/* 第一行：输入框 + 确认 */}
+                      <div className="flex items-center gap-1.5 mb-2">
                         <TextInput
                           value={newItemLabelInline}
                           onChange={(e) => setNewItemLabelInline(e.target.value)}
@@ -297,12 +298,13 @@ export default function MemoryLabModule() {
                           value={newItemSizeInline}
                           onChange={(e) => setNewItemSizeInline(e.target.value)}
                           placeholder="大小"
-                          className="w-24 text-xs"
+                          className="w-20 text-xs"
                         />
                         <button
                           type="button"
                           onClick={() => confirmAddSection(region.name)}
-                          className="flex items-center justify-center w-8 h-8 rounded bg-accent text-white hover:bg-accent/90 transition-colors"
+                          disabled={!newItemLabelInline}
+                          className="flex items-center justify-center w-7 h-7 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                           title="确认添加"
                         >
                           ✓
@@ -310,21 +312,21 @@ export default function MemoryLabModule() {
                         <button
                           type="button"
                           onClick={() => setAddingInSection(null)}
-                          className="flex items-center justify-center w-8 h-8 rounded border border-line text-muted hover:text-ink transition-colors"
+                          className="flex items-center justify-center w-7 h-7 rounded border border-line text-muted hover:text-ink transition-colors"
                           title="取消"
                         >
                           ×
                         </button>
                       </div>
-                      {/* 属性选择 */}
-                      <div className="flex flex-wrap gap-1.5">
+                      {/* 第二行：属性选择 */}
+                      <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-muted">属性:</span>
                         {SECTION_ATTRS.map((attr) => (
                           <button
                             key={attr.id}
                             type="button"
                             onClick={() => toggleSectionAttr(attr.id)}
-                            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                            className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
                               newItemAttrsInline.includes(attr.id)
                                 ? 'border-accent bg-accent/20 text-accent'
                                 : 'border-line bg-panel hover:border-accent hover:text-accent'
