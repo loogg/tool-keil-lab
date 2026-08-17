@@ -44,17 +44,10 @@ export default function MemoryLabModule() {
   // 核心状态
   const [scene, setScene] = useState('default')
   const [model, setModel] = useState(() => createDefaultModel())
-  const [selectedItem, setSelectedItem] = useState(null)
-  const [selectedRegion, setSelectedRegion] = useState(null)
 
   // 编辑状态
   const [scatterText, setScatterText] = useState(() => generateScatter(createDefaultModel()))
   const [scatterEditMode, setScatterEditMode] = useState(false)
-  const [newItemLabel, setNewItemLabel] = useState('')
-  const [newItemSize, setNewItemSize] = useState('0x1000')
-  const [newRegionName, setNewRegionName] = useState('')
-  const [newRegionBase, setNewRegionBase] = useState('0x20000000')
-  const [newRegionSize, setNewRegionSize] = useState('0x10000')
 
   // 筛选器与 FIXED
   const [filter, setFilter] = useState('+RO')
@@ -81,8 +74,6 @@ export default function MemoryLabModule() {
     const newModel = sceneObj.modelFn()
     setModel(newModel)
     setScatterText(generateScatter(newModel))
-    setSelectedItem(null)
-    setSelectedRegion(null)
     setBootStep(-1)
   }
 
@@ -120,9 +111,78 @@ export default function MemoryLabModule() {
     return () => clearTimeout(timer)
   }, [bootPlaying, bootStep])
 
-  // ---------- 实验① scatter 编辑器（核心，含三层功能） ----------
+  // ---------- 实验① scatter 编辑器（树形面板 + 拖拽） ----------
+  const [expandedRegions, setExpandedRegions] = useState(() => new Set(regions.map((r) => r.name)))
+  const [dragItemId, setDragItemId] = useState(null)
+  const [dragOverRegion, setDragOverRegion] = useState(null)
+
+  const toggleRegion = (name) => {
+    const next = new Set(expandedRegions)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    setExpandedRegions(next)
+  }
+
+  const handleDragStart = (itemId) => {
+    setDragItemId(itemId)
+  }
+
+  const handleDragOver = (e, regionName) => {
+    e.preventDefault()
+    setDragOverRegion(regionName)
+  }
+
+  const handleDragLeave = () => {
+    setDragOverRegion(null)
+  }
+
+  const handleDrop = (regionName) => {
+    if (dragItemId) {
+      setModel(placeItem(model, dragItemId, regionName))
+    }
+    setDragItemId(null)
+    setDragOverRegion(null)
+  }
+
+  const [addingInSection, setAddingInSection] = useState(null)
+  const [newItemLabelInline, setNewItemLabelInline] = useState('')
+  const [newItemSizeInline, setNewItemSizeInline] = useState('0x1000')
+
+  const startAddSection = (regionName) => {
+    setAddingInSection(regionName)
+    setNewItemLabelInline('')
+    setNewItemSizeInline('0x1000')
+  }
+
+  const confirmAddSection = (regionName) => {
+    if (newItemLabelInline) {
+      setModel(addItem(model, { label: newItemLabelInline, region: regionName, size: parseInt(newItemSizeInline, 16) || 0x1000 }))
+    }
+    setAddingInSection(null)
+  }
+
+  const [addingRegion, setAddingRegion] = useState(false)
+  const [newRegionNameInline, setNewRegionNameInline] = useState('')
+  const [newRegionBaseInline, setNewRegionBaseInline] = useState('0x20000000')
+  const [newRegionSizeInline, setNewRegionSizeInline] = useState('0x10000')
+
+  const startAddRegion = () => {
+    setAddingRegion(true)
+    setNewRegionNameInline('')
+    setNewRegionBaseInline('0x20000000')
+    setNewRegionSizeInline('0x10000')
+  }
+
+  const confirmAddRegion = () => {
+    if (newRegionNameInline) {
+      setModel(addRegion(model, { name: newRegionNameInline, base: parseInt(newRegionBaseInline, 16), maxSize: parseInt(newRegionSizeInline, 16) }))
+    }
+    setAddingRegion(false)
+  }
+
   const scatterControl = (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      {/* 场景预设 */}
       <div>
         <SectionLabel className="mb-2">场景预设</SectionLabel>
         <Segmented
@@ -133,84 +193,118 @@ export default function MemoryLabModule() {
         />
       </div>
 
-      <div>
-        <SectionLabel className="mb-2">Section 清单</SectionLabel>
-        <div className="overflow-y-auto rounded-lg border border-line bg-panel max-h-48">
-          {model.items.map((item) => (
-            <div key={item.id} className="flex items-center gap-2 border-b border-line px-2 py-1.5 last:border-b-0">
-              <button
-                type="button"
-                onClick={() => setSelectedItem(selectedItem === item.id ? null : item.id)}
-                className={`flex-1 text-left text-xs ${selectedItem === item.id ? 'text-accent font-semibold' : 'text-ink'}`}
-              >
-                <span className="font-mono">{item.label}</span>
-                <span className="ml-2 text-muted">{fmtKB(item.size)}</span>
-              </button>
-              <IconButton onClick={() => setModel(removeItem(model, item.id))} title="删除"><span className="text-danger">×</span></IconButton>
-            </div>
-          ))}
-        </div>
-        {/* 添加 section */}
-        <div className="mt-2 flex gap-1.5">
-          <TextInput value={newItemLabel} onChange={(e) => setNewItemLabel(e.target.value)} placeholder="section 标签" className="flex-1 text-xs" />
-          <TextInput value={newItemSize} onChange={(e) => setNewItemSize(e.target.value)} placeholder="大小" className="w-20 text-xs" />
-          <Button variant="primary" onClick={() => {
-            if (!newItemLabel || !selectedRegion) return
-            setModel(addItem(model, { label: newItemLabel, region: selectedRegion, size: parseInt(newItemSize, 16) || 0x1000 }))
-            setNewItemLabel('')
-          }}>添加</Button>
-        </div>
-      </div>
+      {/* 树形结构：Region → Sections */}
+      <div className="space-y-1">
+        {regions.map((region) => {
+          const regionItems = model.items.filter((i) => i.region === region.name)
+          const isExpanded = expandedRegions.has(region.name)
+          const isDragOver = dragOverRegion === region.name
 
-      <div>
-        <SectionLabel className="mb-2">Region 列表</SectionLabel>
-        <div className="overflow-y-auto rounded-lg border border-line bg-panel max-h-40">
-          {regions.map((region) => (
-            <div key={region.name} className="flex items-center gap-2 border-b border-line px-2 py-1.5 last:border-b-0">
-              <button
-                type="button"
-                onClick={() => setSelectedRegion(selectedRegion === region.name ? null : region.name)}
-                className={`flex-1 text-left text-xs ${selectedRegion === region.name ? 'text-accent font-semibold' : 'text-ink'}`}
+          return (
+            <div key={region.name} className="rounded-lg border border-line bg-panel overflow-hidden">
+              {/* Region 行 */}
+              <div
+                className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-panel-2 transition-colors"
+                onClick={() => toggleRegion(region.name)}
+                onDragOver={(e) => handleDragOver(e, region.name)}
+                onDragLeave={handleDragLeave}
+                onDrop={() => handleDrop(region.name)}
               >
-                <span className="font-mono">{region.name}</span>
-                <span className="ml-2 text-muted">{fmtSize(region.maxSize)}</span>
-              </button>
-              <IconButton onClick={() => setModel(removeRegion(model, region.name))} title="删除"><span className="text-danger">×</span></IconButton>
-            </div>
-          ))}
-        </div>
-        {/* 添加 region */}
-        <div className="mt-2 grid grid-cols-3 gap-1.5">
-          <TextInput value={newRegionName} onChange={(e) => setNewRegionName(e.target.value)} placeholder="名称" className="text-xs" />
-          <TextInput value={newRegionBase} onChange={(e) => setNewRegionBase(e.target.value)} placeholder="base" className="text-xs" />
-          <TextInput value={newRegionSize} onChange={(e) => setNewRegionSize(e.target.value)} placeholder="size" className="text-xs" />
-        </div>
-        <Button variant="ghost" className="mt-1.5 w-full" onClick={() => {
-          if (!newRegionName) return
-          setModel(addRegion(model, { name: newRegionName, base: parseInt(newRegionBase, 16), maxSize: parseInt(newRegionSize, 16) }))
-          setNewRegionName('')
-        }}>添加 Region</Button>
-      </div>
+                <span className={`text-xs transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+                <span className="flex-1 font-mono text-sm font-semibold text-ink">{region.name}</span>
+                <span className="text-xs text-muted">{fmtSize(region.maxSize)}</span>
+                {region.attrs.fixed && <span className="text-[10px] px-1 rounded border border-warn/40 bg-warn/10 text-warn">FIXED</span>}
+                {region.attrs.uninit && <span className="text-[10px] px-1 rounded border border-accent-2/40 bg-accent-2/10 text-accent-2">UNINIT</span>}
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setModel(removeRegion(model, region.name)) }}
+                  className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger/80 transition-opacity"
+                  title="删除 Region"
+                >
+                  ×
+                </button>
+              </div>
 
-      <div>
-        <SectionLabel className="mb-2">移动 Section</SectionLabel>
-        <p className="mb-2 text-xs text-muted">选中 section 后点击目标 region</p>
-        <div className="space-y-1">
-          {regions.map((region) => (
-            <button
-              key={region.name}
-              type="button"
-              disabled={!selectedItem}
-              onClick={() => {
-                setModel(placeItem(model, selectedItem, region.name))
-                setSelectedItem(null)
-              }}
-              className={`block w-full rounded border px-2 py-1 text-left text-xs ${selectedItem ? 'cursor-pointer hover:border-accent' : 'cursor-default'} border-line bg-panel-2`}
-            >
-              <span className="font-mono">{region.name}</span>
-            </button>
-          ))}
-        </div>
+              {/* Sections 列表 */}
+              {isExpanded && (
+                <div className={`border-t border-line ${isDragOver ? 'bg-accent/5' : ''}`}>
+                  {regionItems.map((item) => (
+                    <div
+                      key={item.id}
+                      draggable
+                      onDragStart={() => handleDragStart(item.id)}
+                      className="group flex items-center gap-2 pl-8 pr-3 py-1.5 hover:bg-panel-2 cursor-move transition-colors"
+                    >
+                      <span className="text-xs text-muted">├</span>
+                      <span className="flex-1 font-mono text-xs text-ink truncate">{item.label}</span>
+                      <span className="text-xs text-muted">{fmtKB(item.size)}</span>
+                      <button
+                        type="button"
+                        onClick={() => setModel(removeItem(model, item.id))}
+                        className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger/80 transition-opacity"
+                        title="删除 Section"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* 行内添加 Section */}
+                  {addingInSection === region.name ? (
+                    <div className="flex items-center gap-2 pl-8 pr-3 py-1.5 bg-panel-2">
+                      <TextInput
+                        value={newItemLabelInline}
+                        onChange={(e) => setNewItemLabelInline(e.target.value)}
+                        placeholder="section 标签"
+                        className="flex-1 text-xs"
+                        autoFocus
+                      />
+                      <TextInput
+                        value={newItemSizeInline}
+                        onChange={(e) => setNewItemSizeInline(e.target.value)}
+                        placeholder="大小"
+                        className="w-20 text-xs"
+                      />
+                      <Button variant="primary" onClick={() => confirmAddSection(region.name)} className="text-xs py-1 px-2">
+                        确认
+                      </Button>
+                      <Button variant="ghost" onClick={() => setAddingInSection(null)} className="text-xs py-1 px-2">
+                        取消
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => startAddSection(region.name)}
+                      className="w-full text-left pl-8 pr-3 py-1.5 text-xs text-muted hover:text-accent hover:bg-panel-2 transition-colors"
+                    >
+                      + 添加 section...
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        {/* 添加 Region */}
+        {addingRegion ? (
+          <div className="rounded-lg border border-accent/40 bg-accent/5 p-3 space-y-2">
+            <div className="grid grid-cols-3 gap-2">
+              <TextInput value={newRegionNameInline} onChange={(e) => setNewRegionNameInline(e.target.value)} placeholder="名称" className="text-xs" autoFocus />
+              <TextInput value={newRegionBaseInline} onChange={(e) => setNewRegionBaseInline(e.target.value)} placeholder="base" className="text-xs" />
+              <TextInput value={newRegionSizeInline} onChange={(e) => setNewRegionSizeInline(e.target.value)} placeholder="size" className="text-xs" />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="primary" onClick={confirmAddRegion} className="flex-1">确认添加</Button>
+              <Button variant="ghost" onClick={() => setAddingRegion(false)}>取消</Button>
+            </div>
+          </div>
+        ) : (
+          <Button variant="ghost" onClick={startAddRegion} className="w-full">
+            + 添加 Region
+          </Button>
+        )}
       </div>
     </div>
   )
