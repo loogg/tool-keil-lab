@@ -46,8 +46,12 @@ export default function MemoryLabModule() {
   const [model, setModel] = useState(() => createDefaultModel())
 
   // 编辑状态
-  const [scatterText, setScatterText] = useState(() => generateScatter(createDefaultModel()))
   const [scatterEditMode, setScatterEditMode] = useState(false)
+  const [manualScatterText, setManualScatterText] = useState('')
+
+  // scatter 文本：非编辑模式时自动生成
+  const generatedScatterText = useMemo(() => generateScatter(model), [model])
+  const scatterText = scatterEditMode ? manualScatterText : generatedScatterText
 
   // 筛选器与 FIXED
   const [filter, setFilter] = useState('+RO')
@@ -71,9 +75,9 @@ export default function MemoryLabModule() {
     const sceneObj = SCENES.find((s) => s.id === sceneId)
     if (!sceneObj) return
     setScene(sceneId)
-    const newModel = sceneObj.modelFn()
-    setModel(newModel)
-    setScatterText(generateScatter(newModel))
+    setModel(sceneObj.modelFn())
+    setManualScatterText('')
+    setScatterEditMode(false)
     setBootStep(-1)
   }
 
@@ -85,7 +89,7 @@ export default function MemoryLabModule() {
 
   // scatter 文本变更 → 尝试解析
   const applyScatterText = () => {
-    const result = parseScatter(scatterText)
+    const result = parseScatter(manualScatterText)
     if (result.error) {
       alert(`解析失败：${result.error}`)
       return
@@ -431,14 +435,14 @@ export default function MemoryLabModule() {
           <div>
             <textarea
               value={scatterText}
-              onChange={(e) => setScatterText(e.target.value)}
+              onChange={(e) => setManualScatterText(e.target.value)}
               className="w-full rounded border border-line bg-code p-2 font-mono text-xs text-ink"
               rows={12}
               spellCheck={false}
             />
             <div className="mt-2 flex gap-2">
               <Button variant="primary" onClick={applyScatterText}>应用</Button>
-              <Button variant="ghost" onClick={() => { setScatterText(generateScatter(model)); setScatterEditMode(false) }}>重置</Button>
+              <Button variant="ghost" onClick={() => setScatterEditMode(false)}>重置</Button>
             </div>
           </div>
         ) : (
