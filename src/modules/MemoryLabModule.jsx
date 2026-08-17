@@ -11,7 +11,7 @@ import {
   validateModel,
   PACKEDFS_SECTIONS, selectSections,
 } from '../lib/memoryMap'
-import { generateScatter, generateLd, generateIcf, parseScatter } from '../lib/scatterGen'
+import { generateScatter, generateLd, generateIcf, parseScatter, parseLd, parseIcf } from '../lib/scatterGen'
 import { MAP_SAMPLE, MAP_NOTES, LINKER_SYNTAX, SYMBOL_EXAMPLE, atSnippet } from '../data/memoryLab'
 
 // 地址十六进制：8 位补零大写
@@ -216,9 +216,10 @@ export default function MemoryLabModule() {
   const hitSet = useMemo(() => new Set(selectSections(filter).map((s) => s.name)), [filter])
   const atSnippets = useMemo(() => atSnippet(addr), [addr])
 
-  // scatter 文本变更 → 尝试解析
+  // scatter 文本变更 → 尝试解析（根据当前语法调用对应解析器）
   const applyScatterText = () => {
-    const result = parseScatter(manualScatterText)
+    const parser = syntaxTab === 'ld' ? parseLd : syntaxTab === 'icf' ? parseIcf : parseScatter
+    const result = parser(manualScatterText)
     if (result.error) {
       alert(`解析失败：${result.error}`)
       return

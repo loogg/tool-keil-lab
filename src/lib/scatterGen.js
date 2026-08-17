@@ -286,4 +286,204 @@ export function parseScatter(text) {
   }
 }
 
+// 解析 GCC ld 语法
+export function parseLd(text) {
+  try {
+    const lines = text.split('\n')
+    const regions = []
+    const items = []
+    let inMemory = false
+    let inSections = false
+    let currentRegion = null
+    let itemId = 0
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+
+      // MEMORY {
+      if (trimmed === 'MEMORY' || (trimmed === '{' && inMemory)) {
+        inMemory = true
+        continue
+      }
+
+      // } 结束 MEMORY
+      if (trimmed === '}' && inMemory && !inSections) {
+        inMemory = false
+        continue
+      }
+
+      // MEMORY 块内的 region 定义：ER_IROM1 (rx) : ORIGIN = 0x08000000, LENGTH = 0xC0000
+      if (inMemory) {
+        const memMatch = trimmed.match(/^(\w+)\s+\((\w+)\)\s*:\s*ORIGIN\s*=\s*(0x[0-9a-fA-F]+),\s*LENGTH\s*=\s*(0x[0-9a-fA-F]+)/)
+        if (memMatch) {
+          regions.push({
+            name: memMatch[1],
+            base: parseInt(memMatch[3], 16),
+            maxSize: parseInt(memMatch[4], 16),
+            attrs: { fixed: false, uninit: false },
+            kind: memMatch[2].includes('x') ? 'flash' : 'ram',
+            note: '',
+            loadRegion: 'LR_DEFAULT',
+          })
+        }
+      }
+
+      // SECTIONS {
+      if (trimmed === 'SECTIONS' || (trimmed === '{' && !inMemory)) {
+        inSections = true
+        continue
+      }
+
+      // } 结束 SECTIONS
+      if (trimmed === '}' && inSections) {
+        inSections = false
+        currentRegion = null
+        continue
+      }
+
+      // SECTIONS 块内的 region 定义：.irom1 : { ... } > ER_IROM1
+      if (inSections) {
+        const sectionMatch = trimmed.match(/^\.(\w+)\s*:\s*\{/)
+        if (sectionMatch) {
+          const regionName = sectionMatch[1]
+          // 查找对应的 region（从 MEMORY 中）
+          const matchedRegion = regions.find(r => r.name.toLowerCase() === regionName.toLowerCase() || r.name.toLowerCase().replace(/^(er_|rw_)/, '') === regionName)
+          if (matchedRegion) {
+            currentRegion = matchedRegion
+          } else {
+            // 创建新 region
+            currentRegion = {
+              name: regionName.toUpperCase(),
+              base: 0,
+              maxSize: 0x10000,
+              attrs: { fixed: false, uninit: false },
+              kind: 'ram',
+              note: '',
+              loadRegion: 'LR_DEFAULT',
+            }
+            regions.push(currentRegion)
+          }
+        }
+
+        // } > REGION_NAME 或 } > REGION_NAME AT > LOAD_REGION
+        const endMatch = trimmed.match(/^\}\s*>\s*(\w+)/)
+        if (endMatch && currentRegion) {
+          // 更新 region 名称
+          currentRegion.name = endMatch[1]
+        }
+
+        // 块内的 item 行
+        if (currentRegion && !trimmed.startsWith('}') && !trimmed.match(/^\.(\w+)\s*:/)) {
+          const label = trimmed.replace(/\/\*.*\*\//, '').trim()
+          if (label && !label.startsWith('/*')) {
+            items.push({
+              id: `parsed_${itemId++}`,
+              label,
+              detail: '解析自 ld',
+              region: currentRegion.name,
+              size: 0x1000,
+              custom: true,
+            })
+          }
+        }
+      }
+    }
+
+    // 为每个 region 分配唯一的 loadRegion
+    const loadRegions = [{ name: 'LR_DEFAULT', base: 0, maxSize: 0xFFFFFFFF, note: '默认加载区' }]
+    regions.forEach(r => r.loadRegion = 'LR_DEFAULT')
+
+    return { loadRegions, regions, items }
+  } catch (e) {
+    return { error: e.message }
+  }
+}
+
+// 解析 IAR icf 语法
+export function parseIcf(text) {
+  try {
+    const lines = text.split('\n')
+    const regions = []
+    const items = []
+    const loadRegions = [{ name: 'LR_DEFAULT', base: 0, maxSize: 0xFFFFFFFF, note: '默认加载区' }]
+    let itemId = 0
+
+    // 第一遍：解析 define region
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || !trimmed) continue
+
+      // define region ER_IROM1 = mem:[from 0x08000000 size 0xC0000];
+      const regionMatch = trimmed.match(/define\s+region\s+(\w+)\s*=\s*mem:\[from\s+(0x[0-9a-fA-F]+)\s+size\s+(0x[0-9a-fA-F]+)\]/)
+      if (regionMatch) {
+        regions.push({
+          name: regionMatch[1],
+          base: parseInt(regionMatch[2], 16),
+          maxSize: parseInt(regionMatch[3], 16),
+          attrs: { fixed: false, uninit: false },
+          kind: 'ram',
+          note: '',
+          loadRegion: 'LR_DEFAULT',
+        })
+      }
+    }
+
+    // 第二遍：解析 place in
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || !trimmed) continue
+
+      // place in ER_IROM1 { readonly };
+      const placeMatch = trimmed.match(/place\s+in\s+(\w+)\s*\{([^}]*)\}/)
+      if (placeMatch) {
+        const regionName = placeMatch[1]
+        const placements = placeMatch[2].split(',').map(s => s.trim())
+
+        const region = regions.find(r => r.name === regionName)
+        if (region) {
+          for (const placement of placements) {
+            if (placement === 'readonly' || placement === 'readwrite' || placement === 'block ZI' || placement === 'vector') {
+              items.push({
+                id: `parsed_${itemId++}`,
+                label: placement === 'readonly' ? '.ANY (+RO)' : placement === 'readwrite' ? '.ANY (+RW)' : placement === 'block ZI' ? '.ANY (+ZI)' : '*.o (RESET, +First)',
+                detail: '解析自 icf',
+                region: regionName,
+                size: 0x1000,
+                custom: true,
+              })
+            } else if (placement.startsWith('section')) {
+              const sectionName = placement.replace('section', '').trim()
+              items.push({
+                id: `parsed_${itemId++}`,
+                label: sectionName.includes('*') ? sectionName : `* (${sectionName})`,
+                detail: '解析自 icf',
+                region: regionName,
+                size: 0x1000,
+                custom: true,
+              })
+            }
+          }
+        }
+      }
+
+      // do not initialize { section .bss.sdram.noinit };
+      const noInitMatch = trimmed.match(/do\s+not\s+initialize\s*\{\s*section\s+([^}]+)\}/)
+      if (noInitMatch) {
+        const sectionName = noInitMatch[1].trim()
+        // 找到包含该 section 的 region 并标记 UNINIT
+        for (const region of regions) {
+          const regionItems = items.filter(i => i.region === region.name)
+          if (regionItems.some(i => i.label.includes(sectionName.replace('.bss.', '').replace('*', '')))) {
+            region.attrs.uninit = true
+          }
+        }
+      }
+    }
+
+    return { loadRegions, regions, items }
+  } catch (e) {
+    return { error: e.message }
+  }
+}
+
 export { HEX as formatHex }
