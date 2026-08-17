@@ -5,32 +5,33 @@ import {
 } from './memoryMap.js'
 import { generateScatter } from './scatterGen.js'
 
-const NOTE_SCATTER = `LR_IROM1 0x08000000 0x00100000  {    ; load region size_region
-  ER_IROM1 0x08000000 0x000C0000  {  ; load address = execution address
+const NOTE_SCATTER = `LR_IROM1 0x08000000 0x00100000  {    ; load region
+  ER_IROM1 0x08000000 0x000C0000  {  ; 代码 + 默认只读数据
    *.o (RESET, +First)
    *(InRoot$$Sections)
    .ANY (+RO)
   }
 
-  ER_RODATA 0x080C0000 FIXED 0x00010000 {
+  ER_RODATA 0x080C0000 FIXED 0x00010000  {  ; Data Flash，FIXED 绝对地址
     webserver_packedfs.o (.rodata.*)
   }
 
-  RW_IRAM1 0x20000000 0x00070000  {  ; RW data
+  RW_IRAM1 0x20000000 0x00070000  {  ; 主 SRAM
     mongoose.o (+RO)
     op0715_*.o (+RO)
    .ANY (+RW +ZI)
   }
 
-  RW_CCRAM 0x10000000 0x10000 {
+  RW_CCRAM 0x10000000 0x00010000  {  ; 紧耦合 RAM
     * (.bss.ccram)
     * (.ccram)
     memp.o (+RW +ZI)
   }
 
-  RW_SDRAM_NOINIT 0xC0000000 UNINIT 0x2000000 {
+  RW_SDRAM_NOINIT 0xC0000000 0x02000000 UNINIT  {  ; 外部 SDRAM，UNINIT
     * (.bss.sdram.noinit)
   }
+
 }`
 
 describe('memoryMap', () => {
