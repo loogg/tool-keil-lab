@@ -40,6 +40,131 @@ const SCENES = [
   { id: 'union', label: 'UNION 演示', modelFn: createUnionModel },
 ]
 
+// Region 属性详细说明
+const REGION_ATTR_DETAILS = {
+  fixed: {
+    title: 'FIXED - 固定绝对地址',
+    content: '将执行区固定在指定地址，链接器不会因前方区域大小变化而调整其位置。',
+    usage: ['Bootloader 向量表 (0x08000000)', 'Flash 配置参数区', '需要绝对地址访问的硬件寄存器映射'],
+    syntax: 'ER_NAME 0x08000000 FIXED 0x10000 { ... }',
+  },
+  uninit: {
+    title: 'UNINIT - 不初始化',
+    content: '链接器不为该区域生成初始化代码，保留掉电前的内容。适用于需要保持状态的 RAM 区域。',
+    usage: ['RTC 备份寄存器', '快速启动时跳过清零', '掉电保持数据'],
+    syntax: 'RW_SDRAM_NOINIT 0xC0000000 UNINIT 0x2000000 { ... }',
+  },
+  block: {
+    title: 'BLOCK - 限制大小',
+    content: '限制该 region 的最大大小，防止链接器将其他内容放入。超出限制会产生链接错误。',
+    usage: ['严格控制代码大小', '防止意外溢出到其他区域', '模块化分区'],
+    syntax: 'ER_CODE 0x00020000 BLOCK(0x00040000) { ... }',
+  },
+  pi: {
+    title: 'PI - 位置无关代码',
+    content: '标记该加载区包含位置无关代码（PIC），可在任意地址运行。常用于 Bootloader 或 OTA 升级场景。',
+    usage: ['Bootloader 自身', 'OTA 升级固件', '可在 RAM 中运行的代码'],
+    syntax: 'LR_APP 0x08020000 0x000E0000 PI { ... }',
+  },
+  overlay: {
+    title: 'OVERLAY - 覆盖区',
+    content: '多个加载区共享同一段物理地址，通过软件切换加载不同内容。用于内存极度受限的场景。',
+    usage: ['多固件镜像切换', 'Bank 切换', '共享 RAM 的不同用途'],
+    syntax: 'LR_OVERLAY1 0x20000000 0x10000 OVERLAY { ... }',
+  },
+}
+
+// Section 属性详细说明
+const SECTION_ATTR_DETAILS = {
+  '+RO': { title: '+RO - 只读属性', content: '包含代码和只读数据（.text, .rodata）。放置在 Flash 中。' },
+  '+RW': { title: '+RW - 读写属性', content: '包含有初值的全局/静态变量（.data）。启动时从 Flash 复制到 RAM。' },
+  '+ZI': { title: '+ZI - 零初始化', content: '包含未初始化或零初始化的变量（.bss）。启动时清零，不占 Flash 空间。' },
+  'RESET': { title: 'RESET - 复位向量', content: '包含中断向量表。必须放在 Flash 起始地址 (0x08000000)。' },
+  '+First': { title: '+First - 最前放置', content: '强制该 section 放在 region 的最开头。常用于向量表或启动代码。' },
+}
+
+// 属性按钮组件（带详细说明弹层）
+function RegionAttrButton({ attr, selected, onClick }) {
+  const [showDetail, setShowDetail] = useState(false)
+  const detail = REGION_ATTR_DETAILS[attr.id]
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => { onClick(); setShowDetail(false) }}
+        onDoubleClick={() => setShowDetail(!showDetail)}
+        className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+          selected
+            ? attr.id === 'fixed'
+              ? 'border-warn bg-warn/20 text-warn'
+              : attr.id === 'uninit'
+              ? 'border-accent-2 bg-accent-2/20 text-accent-2'
+              : attr.id === 'block'
+              ? 'border-amber-400 bg-amber-400/20 text-amber-400'
+              : 'border-emerald-400 bg-emerald-400/20 text-emerald-400'
+            : 'border-line bg-panel hover:border-accent hover:text-accent'
+        }`}
+        title={attr.desc}
+      >
+        {selected ? '✓ ' : ''}{attr.label}
+        <span className="ml-0.5 opacity-50">ⓘ</span>
+      </button>
+      {showDetail && detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowDetail(false)}>
+          <div className="rounded-lg border border-line bg-panel p-4 max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">{detail.title}</h3>
+            <p className="text-xs text-muted mb-3">{detail.content}</p>
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold text-accent">典型用途:</p>
+              <ul className="text-xs text-muted list-disc list-inside space-y-0.5">
+                {detail.usage.map((u, i) => <li key={i}>{u}</li>)}
+              </ul>
+              <p className="text-[10px] font-semibold text-accent mt-2">语法示例:</p>
+              <pre className="text-[11px] text-ink bg-code rounded p-2 overflow-x-auto">{detail.syntax}</pre>
+            </div>
+            <button className="mt-3 w-full rounded bg-accent/20 text-accent text-xs py-1.5" onClick={() => setShowDetail(false)}>关闭</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// Section 属性按钮组件（带详细说明弹层）
+function SectionAttrButton({ attr, selected, onClick }) {
+  const [showDetail, setShowDetail] = useState(false)
+  const detail = SECTION_ATTR_DETAILS[attr.id]
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => { onClick(); setShowDetail(false) }}
+        onDoubleClick={() => setShowDetail(!showDetail)}
+        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+          selected
+            ? 'border-accent bg-accent/20 text-accent'
+            : 'border-line bg-panel hover:border-accent hover:text-accent'
+        }`}
+        title={attr.desc}
+      >
+        {selected ? '✓ ' : ''}{attr.label}
+        <span className="ml-0.5 opacity-50">ⓘ</span>
+      </button>
+      {showDetail && detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowDetail(false)}>
+          <div className="rounded-lg border border-line bg-panel p-4 max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">{detail.title}</h3>
+            <p className="text-xs text-muted">{detail.content}</p>
+            <button className="mt-3 w-full rounded bg-accent/20 text-accent text-xs py-1.5" onClick={() => setShowDetail(false)}>关闭</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function MemoryLabModule() {
   // 核心状态
   const [scene, setScene] = useState('default')
@@ -341,23 +466,16 @@ export default function MemoryLabModule() {
                           ×
                         </button>
                       </div>
-                      {/* 第二行：属性选择 */}
+                      {/* 第二行：属性选择（带详细说明弹层） */}
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-muted">属性:</span>
                         {SECTION_ATTRS.map((attr) => (
-                          <button
+                          <SectionAttrButton
                             key={attr.id}
-                            type="button"
+                            attr={attr}
+                            selected={newItemAttrsInline.includes(attr.id)}
                             onClick={() => toggleSectionAttr(attr.id)}
-                            className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
-                              newItemAttrsInline.includes(attr.id)
-                                ? 'border-accent bg-accent/20 text-accent'
-                                : 'border-line bg-panel hover:border-accent hover:text-accent'
-                            }`}
-                            title={attr.desc}
-                          >
-                            {attr.label}
-                          </button>
+                          />
                         ))}
                       </div>
                     </div>
@@ -384,29 +502,16 @@ export default function MemoryLabModule() {
               <TextInput value={newRegionBaseInline} onChange={(e) => setNewRegionBaseInline(e.target.value)} placeholder="base" className="text-xs" />
               <TextInput value={newRegionSizeInline} onChange={(e) => setNewRegionSizeInline(e.target.value)} placeholder="size" className="text-xs" />
             </div>
-            {/* 属性选择 */}
+            {/* 属性选择（带详细说明弹层） */}
             <div className="flex flex-wrap gap-2">
               <span className="text-[10px] text-muted">属性:</span>
               {REGION_ATTRS.map((attr) => (
-                <button
+                <RegionAttrButton
                   key={attr.id}
-                  type="button"
+                  attr={attr}
+                  selected={newRegionAttrsInline[attr.id]}
                   onClick={() => toggleRegionAttr(attr.id)}
-                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                    newRegionAttrsInline[attr.id]
-                      ? attr.id === 'fixed'
-                        ? 'border-warn bg-warn/20 text-warn'
-                        : attr.id === 'uninit'
-                        ? 'border-accent-2 bg-accent-2/20 text-accent-2'
-                        : attr.id === 'block'
-                        ? 'border-amber-400 bg-amber-400/20 text-amber-400'
-                        : 'border-emerald-400 bg-emerald-400/20 text-emerald-400'
-                      : 'border-line bg-panel hover:border-accent hover:text-accent'
-                  }`}
-                  title={attr.desc}
-                >
-                  {newRegionAttrsInline[attr.id] ? '✓ ' : ''}{attr.label}
-                </button>
+                />
               ))}
             </div>
             <div className="flex gap-2">
