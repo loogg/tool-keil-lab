@@ -189,8 +189,11 @@ export default function MemoryLabModule() {
   const [newRegionAttrsInline, setNewRegionAttrsInline] = useState({ fixed: false, uninit: false })
 
   const REGION_ATTRS = [
-    { id: 'fixed', label: 'FIXED', desc: '固定绝对地址' },
-    { id: 'uninit', label: 'UNINIT', desc: '不初始化' },
+    { id: 'fixed', label: 'FIXED', desc: '固定绝对地址，不随链接器调整' },
+    { id: 'uninit', label: 'UNINIT', desc: '不初始化（保留掉电前内容）' },
+    { id: 'block', label: 'BLOCK', desc: '限制 region 最大大小' },
+    { id: 'pi', label: 'PI', desc: '位置无关代码（Load Region 用）' },
+    { id: 'overlay', label: 'OVERLAY', desc: '多加载区共享地址空间' },
   ]
 
   const startAddRegion = () => {
@@ -377,7 +380,11 @@ export default function MemoryLabModule() {
                     newRegionAttrsInline[attr.id]
                       ? attr.id === 'fixed'
                         ? 'border-warn bg-warn/20 text-warn'
-                        : 'border-accent-2 bg-accent-2/20 text-accent-2'
+                        : attr.id === 'uninit'
+                        ? 'border-accent-2 bg-accent-2/20 text-accent-2'
+                        : attr.id === 'block'
+                        ? 'border-amber-400 bg-amber-400/20 text-amber-400'
+                        : 'border-emerald-400 bg-emerald-400/20 text-emerald-400'
                       : 'border-line bg-panel hover:border-accent hover:text-accent'
                   }`}
                   title={attr.desc}

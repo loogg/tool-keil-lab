@@ -57,8 +57,11 @@ export function generateScatter(model) {
     for (const region of regions) {
       const attrs = []
       if (region.attrs.fixed) attrs.push(`FIXED ${HEX(region.maxSize)}`)
+      else if (region.attrs.block) attrs.push(`BLOCK(${HEX(region.maxSize)})`)
       else attrs.push(HEX(region.maxSize))
       if (region.attrs.uninit) attrs.push('UNINIT')
+      if (region.attrs.pi) attrs.push('PI')
+      if (region.attrs.overlay) attrs.push('OVERLAY')
       if (region.unionWith) attrs.push(`UNION ${region.unionWith}`)
 
       lines.push(`  ${region.name} ${HEX(region.base)} ${attrs.join(' ')}  {  ; ${region.note || region.kind}`)
@@ -96,14 +99,20 @@ export function parseScatter(text) {
       }
 
       // Region 行：ER_IROM1 0x08000000 0x000C0000 { 或 ER_RODATA 0x080C0000 FIXED 0x00010000 {
-      const regionMatch = line.match(/^(\w+)\s+(0x[0-9a-fA-F]+)\s+(FIXED\s+)?(0x[0-9a-fA-F]+)(\s+UNINIT)?(\s+UNION\s+\w+)?\s*\{/)
+      const regionMatch = line.match(/^(\w+)\s+(0x[0-9a-fA-F]+)\s+(FIXED\s+|BLOCK\()?(\s*0x[0-9a-fA-F]+\)?)(\s+UNINIT)?(\s+PI)?(\s+OVERLAY)?(\s+UNION\s+\w+)?\s*\{/)
       if (regionMatch && currentLR) {
-        const attrs = { fixed: !!line.includes('FIXED'), uninit: !!line.includes('UNINIT') }
+        const attrs = {
+          fixed: !!line.includes('FIXED'),
+          uninit: !!line.includes('UNINIT'),
+          block: !!line.includes('BLOCK'),
+          pi: !!line.includes(' PI'),
+          overlay: !!line.includes('OVERLAY'),
+        }
         const unionMatch = line.match(/UNION\s+(\w+)/)
         currentRegion = {
           name: regionMatch[1],
           base: parseInt(regionMatch[2], 16),
-          maxSize: parseInt(regionMatch[4], 16),
+          maxSize: parseInt(regionMatch[3].replace(/[^0-9a-fA-F]/g, ''), 16) || 0x10000,
           attrs,
           kind: 'ram', // 默认，后续可推断
           note: '',
