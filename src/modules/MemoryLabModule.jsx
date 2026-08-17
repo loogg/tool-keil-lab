@@ -251,32 +251,66 @@ export default function MemoryLabModule() {
 
                   {/* 行内添加 Section */}
                   {addingInSection === region.name ? (
-                    <div className="flex items-center gap-2 pl-8 pr-3 py-1.5 bg-panel-2">
-                      <TextInput
-                        value={newItemLabelInline}
-                        onChange={(e) => setNewItemLabelInline(e.target.value)}
-                        placeholder="section 标签"
-                        className="flex-1 text-xs"
-                        autoFocus
-                      />
-                      <TextInput
-                        value={newItemSizeInline}
-                        onChange={(e) => setNewItemSizeInline(e.target.value)}
-                        placeholder="大小"
-                        className="w-20 text-xs"
-                      />
-                      <Button variant="primary" onClick={() => confirmAddSection(region.name)} className="text-xs py-1 px-2">
-                        确认
-                      </Button>
-                      <Button variant="ghost" onClick={() => setAddingInSection(null)} className="text-xs py-1 px-2">
-                        取消
-                      </Button>
+                    <div className="pl-8 pr-3 py-2 bg-panel-2 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <TextInput
+                          value={newItemLabelInline}
+                          onChange={(e) => setNewItemLabelInline(e.target.value)}
+                          placeholder="section 标签（如 .text, .data）"
+                          className="flex-1 text-xs"
+                          autoFocus
+                        />
+                        <TextInput
+                          value={newItemSizeInline}
+                          onChange={(e) => setNewItemSizeInline(e.target.value)}
+                          placeholder="大小"
+                          className="w-24 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => confirmAddSection(region.name)}
+                          className="flex items-center justify-center w-8 h-8 rounded bg-accent text-white hover:bg-accent/90 transition-colors"
+                          title="确认添加"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAddingInSection(null)}
+                          className="flex items-center justify-center w-8 h-8 rounded border border-line text-muted hover:text-ink transition-colors"
+                          title="取消"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {/* 预设选项 */}
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="text-[10px] text-muted">预设:</span>
+                        {[
+                          { label: '.text', size: '0x4000' },
+                          { label: '.rodata', size: '0x2000' },
+                          { label: '.data', size: '0x1000' },
+                          { label: '.bss', size: '0x2000' },
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setNewItemLabelInline(preset.label)
+                              setNewItemSizeInline(preset.size)
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded border border-line bg-panel hover:border-accent hover:text-accent transition-colors"
+                          >
+                            {preset.label} ({preset.size})
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : (
                     <button
                       type="button"
                       onClick={() => startAddSection(region.name)}
-                      className="w-full text-left pl-8 pr-3 py-1.5 text-xs text-muted hover:text-accent hover:bg-panel-2 transition-colors"
+                      className="w-full text-left pl-8 pr-3 py-2 text-xs text-muted hover:text-accent hover:bg-panel-2 transition-colors border-b border-line/50"
                     >
                       + 添加 section...
                     </button>
@@ -295,15 +329,55 @@ export default function MemoryLabModule() {
               <TextInput value={newRegionBaseInline} onChange={(e) => setNewRegionBaseInline(e.target.value)} placeholder="base" className="text-xs" />
               <TextInput value={newRegionSizeInline} onChange={(e) => setNewRegionSizeInline(e.target.value)} placeholder="size" className="text-xs" />
             </div>
+            {/* 预设选项 */}
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[10px] text-muted">预设:</span>
+              {[
+                { name: 'ER_FLASH', base: '0x08000000', size: '0x40000', note: '256KB Flash' },
+                { name: 'RW_SRAM', base: '0x20000000', size: '0x10000', note: '64KB SRAM' },
+                { name: 'RW_CCRAM', base: '0x10000000', size: '0x10000', note: '64KB CCRAM' },
+                { name: 'RW_SDRAM', base: '0xC0000000', size: '0x100000', note: '1MB SDRAM' },
+              ].map((preset) => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  onClick={() => {
+                    setNewRegionNameInline(preset.name)
+                    setNewRegionBaseInline(preset.base)
+                    setNewRegionSizeInline(preset.size)
+                  }}
+                  className="text-[10px] px-2 py-0.5 rounded border border-line bg-panel hover:border-accent hover:text-accent transition-colors"
+                  title={preset.note}
+                >
+                  {preset.name} ({preset.note})
+                </button>
+              ))}
+            </div>
             <div className="flex gap-2">
-              <Button variant="primary" onClick={confirmAddRegion} className="flex-1">确认添加</Button>
-              <Button variant="ghost" onClick={() => setAddingRegion(false)}>取消</Button>
+              <button
+                type="button"
+                onClick={confirmAddRegion}
+                className="flex items-center justify-center gap-1 flex-1 h-8 rounded bg-accent text-white text-xs hover:bg-accent/90 transition-colors"
+              >
+                ✓ 确认添加
+              </button>
+              <button
+                type="button"
+                onClick={() => setAddingRegion(false)}
+                className="flex items-center justify-center w-8 h-8 rounded border border-line text-muted hover:text-ink transition-colors"
+              >
+                ×
+              </button>
             </div>
           </div>
         ) : (
-          <Button variant="ghost" onClick={startAddRegion} className="w-full">
+          <button
+            type="button"
+            onClick={startAddRegion}
+            className="w-full rounded-lg border border-dashed border-line bg-panel/50 py-2 text-xs text-muted hover:border-accent hover:text-accent transition-colors"
+          >
             + 添加 Region
-          </Button>
+          </button>
         )}
       </div>
     </div>
