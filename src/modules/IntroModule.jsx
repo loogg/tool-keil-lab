@@ -1,7 +1,5 @@
 import { MemoryStick, ScanSearch, Grid3x3, Terminal, Route, Printer } from 'lucide-react'
-import ModuleShell from '../components/ModuleShell'
 import PipelineDiagram from '../components/PipelineDiagram'
-import Callout from '../components/Callout'
 
 const LABS = [
   {
@@ -44,40 +42,51 @@ const LABS = [
 
 export default function IntroModule({ onNavigate = () => {} }) {
   return (
-    <ModuleShell
-      kicker="Overview"
-      title="从源码到芯片"
-      subtitle="本课程把 Keil/Arm 工具链拆成 6 个可以动手玩的实验室。先看一遍构建管线，再挑一个模块开始。"
-    >
-      <section>
-        <h3 className="mb-3 text-sm font-semibold text-ink">构建管线</h3>
-        <PipelineDiagram onNavigate={onNavigate} />
-      </section>
-      <section>
-        <h3 className="mb-3 text-sm font-semibold text-ink">六个实验室</h3>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          {LABS.map((lab) => {
-            const Icon = lab.icon
-            return (
-              <button
-                key={lab.id}
-                type="button"
-                onClick={() => onNavigate(lab.id)}
-                className="flex flex-col items-start gap-2 rounded-lg border border-line bg-panel p-4 text-left transition-all hover:-translate-y-0.5 hover:ring-1 hover:ring-accent"
-              >
-                <span className="flex items-center gap-2">
-                  <Icon size={16} className="text-accent" />
-                  <span className="text-sm font-bold text-ink">{lab.title}</span>
-                </span>
-                <span className="text-xs leading-relaxed text-muted">{lab.desc}</span>
-              </button>
-            )
-          })}
-        </div>
-      </section>
-      <Callout tone="tip" title="可复现性承诺">
-        本工具所有数值都可复现：结构体偏移、宏取值、scatter 文本均由单元测试锁定，与 Arm 官方文档一致。
-      </Callout>
-    </ModuleShell>
+    <div className="min-h-[calc(100dvh-6.5rem)] px-5 py-8 lg:px-10">
+      <div className="mx-auto max-w-5xl">
+        <section className="mb-8">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[1px] text-muted">Overview</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">从源码到芯片</h1>
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted">
+            本课程把 Keil/Arm 工具链拆成 6 个可以动手玩的实验室。先看一遍构建管线，再挑一个模块开始。
+          </p>
+        </section>
+
+        <section className="mb-10">
+          <div className="mb-4 text-[11px] font-semibold uppercase tracking-[1px] text-muted">Build Pipeline · 构建管线</div>
+          <div className="rounded-lg border border-line bg-panel p-5">
+            <PipelineDiagram onNavigate={onNavigate} />
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-4 text-[11px] font-semibold uppercase tracking-[1px] text-muted">Six Labs · 六个实验室</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {LABS.map((lab) => {
+              const Icon = lab.icon
+              return (
+                <button
+                  key={lab.id}
+                  type="button"
+                  onClick={() => onNavigate(lab.id)}
+                  className="flex flex-col items-start gap-2 rounded-lg border border-line bg-panel p-4 text-left transition-all hover:-translate-y-0.5 hover:border-accent/60"
+                >
+                  <span className="flex items-center gap-2">
+                    <Icon size={16} className="text-accent" />
+                    <span className="text-sm font-semibold text-ink">{lab.title}</span>
+                  </span>
+                  <span className="text-xs leading-relaxed text-muted">{lab.desc}</span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        <footer className="mt-10 rounded-lg border border-ok/40 bg-ok/10 px-4 py-3 text-xs leading-relaxed">
+          <strong className="text-ok">可复现性承诺</strong>
+          <p className="mt-1 text-ink/85">本工具所有数值都可复现：结构体偏移、宏取值、scatter 文本均由单元测试锁定，与 Arm 官方文档一致。</p>
+        </footer>
+      </div>
+    </div>
   )
 }
