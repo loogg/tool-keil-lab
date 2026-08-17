@@ -1,23 +1,54 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
-import ModuleShell from '../components/ModuleShell'
+import Workbench from '../components/workbench/Workbench'
+import {
+  Button, FieldRow, IconButton, SectionLabel, Segmented, Select, StatTile, Switch, TextInput,
+} from '../components/workbench/controls'
+import { DrawerTrigger, Principle, RefTable } from '../components/workbench/Principle'
 import CodeBlock from '../components/CodeBlock'
-import Callout from '../components/Callout'
 import { layoutStruct } from '../lib/structLayout'
 import { accessOutcome, ALIGN_CORES } from '../lib/abiLayout'
 
-// 成员字节着色：成员数超过 4 时循环取色
-const MEMBER_PALETTE = ['bg-sky-500/60', 'bg-emerald-500/60', 'bg-violet-500/60', 'bg-orange-500/60']
+// ---------- 常量与示例 ----------
 
-// 类型下拉选项：char[4] 映射为 {array: 4}
 const TYPE_KEYS = ['uint8_t', 'uint16_t', 'uint32_t', 'uint64_t', 'char[4]']
 const toLayoutType = (key) => (key === 'char[4]' ? { array: 4 } : key)
+const typeToC = (type, name) =>
+  typeof type === 'object' && type.array ? `char ${name}[${type.array}]` : `${type} ${name}`
 
-// 四形态对照表的固定示例：struct header
-const HEADER_EXAMPLE = [
-  { name: 'type', type: 'uint16_t' },
-  { name: 'length', type: 'uint32_t' },
-]
+// 通用嵌入式场景示例（STM32 生态常见数据对象，不绑定任何私人笔记）
+const EXAMPLES = {
+  sensor_frame: {
+    label: 'sensor_frame · 传感器数据帧',
+    members: [
+      { name: 'flags', type: 'uint8_t' },
+      { name: 'timestamp', type: 'uint32_t' },
+      { name: 'x', type: 'uint16_t' },
+      { name: 'y', type: 'uint16_t' },
+      { name: 'z', type: 'uint16_t' },
+    ],
+  },
+  uart_packet: {
+    label: 'uart_packet · 串口协议包',
+    members: [
+      { name: 'type', type: 'uint8_t' },
+      { name: 'length', type: 'uint16_t' },
+      { name: 'data', type: 'char[4]' },
+    ],
+  },
+  gps_point: {
+    label: 'gps_point · GPS 定位点',
+    members: [
+      { name: 'lat', type: 'uint32_t' },
+      { name: 'lon', type: 'uint32_t' },
+      { name: 'alt', type: 'uint16_t' },
+    ],
+  },
+}
+
+const MEMBER_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b']
+const BYTE_COLS = 8
+const hexOffset = (n) => '0x' + n.toString(16).padStart(2, '0')
 
 const FORM_ROWS = [
   { label: '普通', opts: {} },
@@ -35,40 +66,13 @@ const CORE_LABELS = {
   'cortex-m33': 'Cortex-M33',
 }
 
-// 三种 pack 写法（数据内联）
-const PACK_ROWS = [
-  {
-    syntax: '#pragma pack(push, 1) / #pragma pack(pop)',
-    scope: '区间',
-    desc: '成对使用，影响区间内所有声明',
-  },
-  {
-    syntax: '__attribute__((packed))',
-    scope: '单个类型',
-    desc: 'AC5/AC6/GCC 通用，跨版本推荐',
-  },
-  {
-    syntax: '__packed（AC5 原生）',
-    scope: '类型/指针',
-    desc: '还可作非对齐访问修饰符（__packed uint32_t *p），语义更宽，勿与 attribute 混同',
-  },
-]
-
-// AC5/AC6 weak 写法兼容矩阵
-const WEAK_MATRIX = [
-  { syntax: '__weak', ac5: '✓ 原生关键字', ac6: '✗ 不应依赖', note: 'AC5 专属写法' },
-  { syntax: '__attribute__((weak))', ac5: '✓', ac6: '✓', note: '跨版本推荐' },
-  { syntax: '__WEAK（CMSIS）', ac5: '✓', ac6: '✓', note: '用 CMSIS 时优先' },
-]
-
-// 访问结果大卡片配色
 const RESULT_META = {
-  ok: { icon: '✓', label: '访问安全', box: 'border-emerald-400/40 bg-emerald-400/10', text: 'text-emerald-400' },
+  ok: { icon: '✓', label: '访问安全', box: 'border-ok/40 bg-ok/10', text: 'text-ok' },
   slow: { icon: '⚠', label: '能跑但有代价', box: 'border-warn/40 bg-warn/10', text: 'text-warn' },
   fault: { icon: '✗', label: '访问故障', box: 'border-danger/40 bg-danger/10', text: 'text-danger' },
 }
 
-// weak 符号三场景：两个 .o + 链接器 + 结果
+// weak 符号三场景（STM32 HAL 公开机制，通用认知）
 const WEAK_SCENES = {
   both: {
     label: '强弱共存',
@@ -88,7 +92,7 @@ const WEAK_SCENES = {
     ],
     linker: '只有弱符号 → 用弱符号',
     ok: true,
-    result: '使用 HAL 默认空实现 —— STM32 HAL 回调原理',
+    result: '执行 HAL 默认空实现 —— STM32 回调「定义同名函数即可重写」的原因',
   },
   none: {
     label: '都没有',
@@ -102,7 +106,13 @@ const WEAK_SCENES = {
   },
 }
 
-const OBJ_SYM_CLS = { strong: 'text-emerald-400', weak: 'text-warn', none: 'text-muted' }
+const OBJ_SYM_CLS = { strong: 'text-ok', weak: 'text-warn', none: 'text-muted' }
+
+const WEAK_MATRIX = [
+  { syntax: '__weak', ac5: '✓ 原生关键字', ac6: '✗ 不应依赖', note: 'AC5 专属写法' },
+  { syntax: '__attribute__((weak))', ac5: '✓', ac6: '✓', note: '跨版本推荐' },
+  { syntax: '__WEAK（CMSIS）', ac5: '✓', ac6: '✓', note: '用 CMSIS 时优先' },
+]
 
 const SAFE_READ_CODE = `uint32_t safe_read(const packed_struct_t *ps)
 {
@@ -120,15 +130,12 @@ __attribute__((weak)) void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 /* 你的代码里重写同名函数即可接管回调（强符号覆盖弱符号） */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) { ... }`
 
-// 行首偏移地址：0x00、0x08…
-const hexOffset = (n) => '0x' + n.toString(16).padStart(2, '0')
+// ---------- 可视化组件 ----------
 
-const BYTE_COLS = 8
-
-// 字节网格：每行 8 字节，member 按 memberIndex 着色，padding 用斜纹
-function ByteGrid({ layout }) {
+// 字节网格：每行 8 字节，成员按序号取数据色板，padding 用斜纹
+function ByteGrid({ layout, cell = 30, showLegend = true }) {
   if (layout.bytes.length === 0) {
-    return <p className="text-xs text-muted">结构体为空 —— 先添加成员，网格会实时画出每个字节的归属。</p>
+    return <p className="text-xs text-muted">结构体为空 —— 在左侧添加成员，网格实时画出每个字节的归属。</p>
   }
   const rows = []
   for (let i = 0; i < layout.bytes.length; i += BYTE_COLS) rows.push(layout.bytes.slice(i, i + BYTE_COLS))
@@ -136,17 +143,25 @@ function ByteGrid({ layout }) {
     <div className="min-w-0 space-y-1.5 overflow-x-auto">
       {rows.map((row, r) => (
         <div key={r} className="flex items-center gap-1.5">
-          <span className="w-9 text-right font-mono text-xs text-muted">{hexOffset(r * BYTE_COLS)}</span>
+          <span className="w-9 shrink-0 text-right font-mono text-[11px] text-muted">{hexOffset(r * BYTE_COLS)}</span>
           {row.map((b, i) => {
             if (b.kind === 'padding') {
-              return <div key={i} title="padding" className="pad-stripes h-8 w-8 rounded border border-line/70" />
+              return (
+                <div
+                  key={i}
+                  title="padding"
+                  className="pad-stripes shrink-0 rounded border border-line"
+                  style={{ width: cell, height: cell }}
+                />
+              )
             }
             const m = layout.members[b.memberIndex]
             return (
               <div
                 key={i}
                 title={m.name || `成员 ${b.memberIndex + 1}`}
-                className={`flex h-8 w-8 items-center justify-center rounded font-mono text-xs font-semibold text-ink ${MEMBER_PALETTE[b.memberIndex % MEMBER_PALETTE.length]}`}
+                className="flex shrink-0 items-center justify-center rounded font-mono text-[11px] font-semibold text-white/90"
+                style={{ width: cell, height: cell, background: MEMBER_COLORS[b.memberIndex % MEMBER_COLORS.length] }}
               >
                 {(m.name || '?').charAt(0)}
               </div>
@@ -154,29 +169,73 @@ function ByteGrid({ layout }) {
           })}
         </div>
       ))}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-[11px] text-muted">
-        {layout.members.map((m, i) => (
-          <span key={i} className="flex items-center gap-1.5">
-            <span className={`inline-block h-3 w-3 rounded-sm ${MEMBER_PALETTE[i % MEMBER_PALETTE.length]}`} />
-            <span className="font-mono">{m.name || `成员 ${i + 1}`}</span>
+      {showLegend && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-[11px] text-muted">
+          {layout.members.map((m, i) => (
+            <span key={i} className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-3 w-3 rounded-sm"
+                style={{ background: MEMBER_COLORS[i % MEMBER_COLORS.length] }}
+              />
+              <span className="font-mono">{m.name || `成员 ${i + 1}`}</span>
+            </span>
+          ))}
+          <span className="flex items-center gap-1.5">
+            <span className="pad-stripes inline-block h-3 w-3 rounded-sm border border-line" />
+            <span className="font-mono">padding</span>
           </span>
-        ))}
-        <span className="flex items-center gap-1.5">
-          <span className="pad-stripes inline-block h-3 w-3 rounded-sm border border-line/70" />
-          <span className="font-mono">padding</span>
-        </span>
-      </div>
+        </div>
+      )}
     </div>
   )
 }
 
-// weak 场景图示：两个 .o 卡 + 链接器盒 + 结果箭头
+// 成员编辑器（实验①的操作面板）
+function MemberEditor({ members, onUpdate, onRemove, onMove, onAdd }) {
+  return (
+    <div className="space-y-1.5">
+      {members.map((m, i) => (
+        <div key={m.id} className="flex items-center gap-1.5">
+          <span className="w-4 shrink-0 text-center font-mono text-[11px] text-muted">{i}</span>
+          <TextInput
+            value={m.name}
+            onChange={(e) => onUpdate(m.id, { name: e.target.value })}
+            placeholder="成员名"
+            className="min-w-0 flex-1"
+          />
+          <Select value={m.type} onChange={(e) => onUpdate(m.id, { type: e.target.value })}>
+            {TYPE_KEYS.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </Select>
+          <div className="flex shrink-0 gap-1">
+            <IconButton title="上移" disabled={i === 0} onClick={() => onMove(m.id, -1)}>
+              <ArrowUp size={12} />
+            </IconButton>
+            <IconButton title="下移" disabled={i === members.length - 1} onClick={() => onMove(m.id, 1)}>
+              <ArrowDown size={12} />
+            </IconButton>
+            <IconButton title="删除" onClick={() => onRemove(m.id)}>
+              <Trash2 size={12} />
+            </IconButton>
+          </div>
+        </div>
+      ))}
+      <Button variant="ghost" onClick={onAdd} className="flex w-full items-center justify-center gap-1">
+        <Plus size={13} />
+        添加成员
+      </Button>
+    </div>
+  )
+}
+
+// weak 场景图示：两个 .o 卡 → 链接器 → 结果
 function WeakDiagram({ scene }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <div className="flex flex-col gap-2">
         {scene.objs.map((o) => (
-          <div key={o.file} className="rounded-lg border border-line bg-panel-2 px-3 py-2">
+          <div key={o.file} className="rounded-lg border border-line bg-panel px-3 py-2">
             <div className="font-mono text-[11px] text-muted">{o.file}</div>
             <div className={`font-mono text-xs ${OBJ_SYM_CLS[o.kind]}`}>{o.sym}</div>
           </div>
@@ -185,12 +244,12 @@ function WeakDiagram({ scene }) {
       <span className="font-mono text-lg text-muted">→</span>
       <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-center">
         <div className="text-xs font-semibold text-accent">链接器</div>
-        <div className="mt-1 text-[11px] text-ink/85">{scene.linker}</div>
+        <div className="mt-1 text-[11px] text-secondary">{scene.linker}</div>
       </div>
       <span className="font-mono text-lg text-muted">→</span>
       <div
-        className={`max-w-56 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
-          scene.ok ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300' : 'border-danger/40 bg-danger/10 text-danger'
+        className={`max-w-60 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+          scene.ok ? 'border-ok/40 bg-ok/10 text-ok' : 'border-danger/40 bg-danger/10 text-danger'
         }`}
       >
         {scene.ok ? '✓ ' : '✗ '}
@@ -200,33 +259,56 @@ function WeakDiagram({ scene }) {
   )
 }
 
-export default function StructLabModule() {
-  // —— 结构体编辑器 ——
-  const [members, setMembers] = useState([
-    { id: 'm1', name: 'type', type: 'uint16_t' },
-    { id: 'm2', name: 'length', type: 'uint32_t' },
-  ])
-  const [packed, setPacked] = useState(false)
-  const [alignedStr, setAlignedStr] = useState('') // select 的 value 是字符串，'' = 无
-  const [nextId, setNextId] = useState(3)
+// 生成 C 代码
+function toC(layout, structName, packed) {
+  if (layout.members.length === 0) return '/* 结构体为空 */'
+  const head = packed ? `struct __attribute__((packed)) ${structName}` : `struct ${structName}`
+  const body = layout.members.map((m) => `    ${typeToC(m.type, m.name || 'field')};  /* @${m.offset} */`)
+  return `${head} {\n${body.join('\n')}\n};  /* sizeof = ${layout.sizeof} */`
+}
 
-  // —— 故障模拟器 ——
+// ---------- 模块 ----------
+
+export default function StructLabModule() {
+  // 共享结构体状态：实验①②③共用同一份成员定义
+  const [exampleId, setExampleId] = useState('sensor_frame')
+  const [members, setMembers] = useState(() =>
+    EXAMPLES.sensor_frame.members.map((m, i) => ({ id: `m${i}`, ...m })),
+  )
+  const [nextId, setNextId] = useState(EXAMPLES.sensor_frame.members.length)
+  const [packed, setPacked] = useState(false)
+  const [alignedStr, setAlignedStr] = useState('')
+  // 实验③
   const [core, setCore] = useState('cortex-m0')
   const [trap, setTrap] = useState(false)
   const [pickMember, setPickMember] = useState(0)
-
-  // —— weak 场景 ——
+  // 实验④
   const [weakScene, setWeakScene] = useState('both')
 
   const aligned = alignedStr === '' ? null : Number(alignedStr)
-  const layout = layoutStruct(
-    members.map((m) => ({ name: m.name, type: toLayoutType(m.type) })),
-    { packed, aligned },
-  )
+  const layoutMembers = members.map((m) => ({ name: m.name, type: toLayoutType(m.type) }))
+  const layout = layoutStruct(layoutMembers, { packed, aligned })
+  const structName = exampleId || 'demo'
 
-  const updateMember = (id, patch) => setMembers((ms) => ms.map((m) => (m.id === id ? { ...m, ...patch } : m)))
-  const removeMember = (id) => setMembers((ms) => ms.filter((m) => m.id !== id))
-  const moveMember = (id, dir) =>
+  const loadExample = (key) => {
+    if (!key) return
+    setExampleId(key)
+    setMembers(EXAMPLES[key].members.map((m, i) => ({ id: `m${i}`, ...m })))
+    setNextId(EXAMPLES[key].members.length)
+    setPacked(false)
+    setAlignedStr('')
+    setPickMember(0)
+  }
+  const markCustom = () => setExampleId('')
+  const updateMember = (id, patch) => {
+    setMembers((ms) => ms.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+    markCustom()
+  }
+  const removeMember = (id) => {
+    setMembers((ms) => ms.filter((m) => m.id !== id))
+    markCustom()
+  }
+  const moveMember = (id, dir) => {
     setMembers((ms) => {
       const i = ms.findIndex((m) => m.id === id)
       const j = i + dir
@@ -235,349 +317,299 @@ export default function StructLabModule() {
       ;[next[i], next[j]] = [next[j], next[i]]
       return next
     })
+    markCustom()
+  }
   const addMember = () => {
     setMembers((ms) => [...ms, { id: `m${nextId}`, name: `field${nextId}`, type: 'uint8_t' }])
     setNextId(nextId + 1)
-  }
-  const loadExample = () => {
-    setMembers([
-      { id: `m${nextId}`, name: 'type', type: 'uint16_t' },
-      { id: `m${nextId + 1}`, name: 'length', type: 'uint32_t' },
-    ])
-    setNextId(nextId + 2)
-    setPacked(false)
-    setAlignedStr('')
-    setPickMember(0)
+    markCustom()
   }
 
-  // 成员被删后 pickMember 可能越界：取安全索引
+  // 实验③：挑中的成员被删后取安全索引
   const pickIdx = layout.members.length > 0 ? Math.min(pickMember, layout.members.length - 1) : -1
   const picked = pickIdx >= 0 ? layout.members[pickIdx] : null
   const outcome = picked
     ? accessOutcome({ core, accessSize: picked.size, offset: picked.offset, unalignTrap: trap })
     : null
 
-  const inputCls =
-    'rounded border border-line bg-panel px-2 py-1 text-xs text-ink outline-none transition-colors focus:border-accent'
-  const iconBtnCls =
-    'rounded border border-line bg-panel p-1 text-muted transition-colors hover:border-accent hover:text-ink disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:border-line disabled:hover:text-muted'
+  const exampleSelect = (
+    <Select
+      value={exampleId}
+      onChange={(e) => loadExample(e.target.value)}
+      className="w-full"
+      aria-label="示例"
+    >
+      <option value="">自定义（正在编辑）</option>
+      {Object.entries(EXAMPLES).map(([k, ex]) => (
+        <option key={k} value={k}>{ex.label}</option>
+      ))}
+    </Select>
+  )
+
+  // ---- 实验① 字节网格 ----
+  const gridControl = (
+    <div className="space-y-5">
+      <div>
+        <SectionLabel className="mb-2">Members · 成员</SectionLabel>
+        <MemberEditor
+          members={members}
+          onUpdate={updateMember}
+          onRemove={removeMember}
+          onMove={moveMember}
+          onAdd={addMember}
+        />
+      </div>
+      <div>
+        <SectionLabel className="mb-2">Modifiers · 修饰</SectionLabel>
+        <div className="space-y-2">
+          <FieldRow
+            label={
+              <>
+                packed
+                <Principle title="packed 做什么">
+                  取消成员间的自然对齐，所有成员紧挨排列（align 全部按 1），消除内部空隙。代价是非对齐访问风险与部分内核上的性能损失。
+                </Principle>
+              </>
+            }
+          >
+            <Switch label="packed" checked={packed} onChange={setPacked} />
+          </FieldRow>
+          <FieldRow
+            label={
+              <>
+                aligned
+                <Principle title="aligned(N) 做什么">
+                  只管整个结构体对象按 N 字节边界放置，不改动内部成员布局；N 小于自然对齐时无效。
+                </Principle>
+              </>
+            }
+          >
+            <Select value={alignedStr} onChange={(e) => setAlignedStr(e.target.value)} aria-label="aligned">
+              <option value="">无</option>
+              {['1', '2', '4', '8'].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </Select>
+          </FieldRow>
+        </div>
+      </div>
+      <div>
+        <SectionLabel className="mb-2">Example · 示例</SectionLabel>
+        {exampleSelect}
+      </div>
+    </div>
+  )
+
+  const gridCanvas = (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <SectionLabel>Byte Grid · 字节网格</SectionLabel>
+        <Principle title="为什么会有空隙">
+          每个成员的起始地址必须是其自身大小的整数倍（自然对齐）：uint32_t 必须落在 4 的倍数地址上，前面的空档只能填 padding。
+        </Principle>
+        <span className="ml-auto font-mono text-xs text-accent">sizeof = {layout.sizeof}</span>
+      </div>
+      <div className="rounded-lg border border-line bg-panel p-4">
+        <ByteGrid layout={layout} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="sizeof" value={`${layout.sizeof} B`} tone="accent" sub={`struct ${structName}`} />
+        <StatTile
+          label="padding"
+          value={`${layout.padding} B`}
+          tone={layout.padding > 0 ? 'warn' : 'ok'}
+          sub={layout.sizeof > 0 ? `占 ${((layout.padding / layout.sizeof) * 100).toFixed(1)}%` : undefined}
+        />
+        <StatTile label="alignment" value={`${layout.alignment} B`} sub="整体对齐" />
+        <StatTile label="members" value={layout.members.length} sub="成员数" />
+      </div>
+      <CodeBlock title={`${structName}.c`} code={toC(layout, structName, packed)} />
+    </div>
+  )
+
+  // ---- 实验② 四形态对照 ----
+  const formsControl = (
+    <div className="space-y-5">
+      <div>
+        <SectionLabel className="mb-2">Comparison · 对照目标</SectionLabel>
+        {exampleSelect}
+        <p className="mt-2 text-xs leading-relaxed text-muted">
+          当前结构体 {layout.members.length} 个成员。四种形态全部由布局引擎实时计算，不是静态表格。
+        </p>
+      </div>
+      <DrawerTrigger label="pack / aligned 细节" title="pack / aligned 细节">
+        <p>
+          <strong className="text-ink">aligned(4) 不挪动内部成员</strong> —— 它只要求整个结构体对象按 4
+          字节边界放置；尾部补齐是为了让数组中下一个元素仍满足对齐。
+        </p>
+        <p>
+          <strong className="text-ink">packed 管内部，aligned 管整体</strong> —— packed 改变成员布局；aligned(N)
+          只改类型对齐。aligned(4) ≠ 每个成员都按 4 字节对齐。
+        </p>
+        <p>
+          写法：<code className="font-mono text-ink">#pragma pack(push, 1)</code>（区间）、
+          <code className="font-mono text-ink"> __attribute__((packed))</code>（单类型，AC5/AC6/GCC 通用）、
+          <code className="font-mono text-ink"> __packed</code>（AC5 原生，语义更宽，勿与 attribute 混同）。
+        </p>
+      </DrawerTrigger>
+    </div>
+  )
+
+  const formsCanvas =
+    layoutMembers.length === 0 ? (
+      <p className="text-xs text-muted">结构体为空 —— 回到「字节网格」实验添加成员。</p>
+    ) : (
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {FORM_ROWS.map((f) => (
+          <div key={f.label} className="min-w-0 rounded-lg border border-line bg-panel p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="font-mono text-xs text-secondary">{f.label}</span>
+              <span className="font-mono text-xs text-accent">
+                sizeof = {layoutStruct(layoutMembers, f.opts).sizeof}
+              </span>
+            </div>
+            <ByteGrid layout={layoutStruct(layoutMembers, f.opts)} cell={18} showLegend={false} />
+          </div>
+        ))}
+      </div>
+    )
+
+  // ---- 实验③ 非对齐访问 ----
+  const accessControl = (
+    <div className="space-y-5">
+      <FieldRow
+        label={
+          <>
+            内核
+            <Principle title="内核之间差在哪">
+              Cortex-M0/M0+ 硬件不支持非对齐多字节访问，直接故障；M3/M4/M7/M33 支持但拆成多次总线访问，有性能代价。
+            </Principle>
+          </>
+        }
+      >
+        <Select value={core} onChange={(e) => setCore(e.target.value)} aria-label="内核">
+          {Object.keys(ALIGN_CORES).map((k) => (
+            <option key={k} value={k}>{CORE_LABELS[k]}</option>
+          ))}
+        </Select>
+      </FieldRow>
+      <FieldRow label="读取成员">
+        <Select
+          value={pickIdx >= 0 ? pickIdx : ''}
+          disabled={layout.members.length === 0}
+          onChange={(e) => setPickMember(Number(e.target.value))}
+          aria-label="读取成员"
+        >
+          {layout.members.map((m, i) => (
+            <option key={i} value={i}>
+              {m.name || `成员 ${i + 1}`} @ {m.offset}
+            </option>
+          ))}
+        </Select>
+      </FieldRow>
+      <FieldRow
+        label={
+          <>
+            UNALIGN_TRP
+            <Principle title="UNALIGN_TRP 是什么">
+              CCR.UNALIGN_TRP 使能后，硬件把非对齐访问捕获为 UsageFault —— 开发期用来暴露隐患，产品代码通常关闭。
+            </Principle>
+          </>
+        }
+      >
+        <Switch label="UNALIGN_TRP" checked={trap} onChange={setTrap} />
+      </FieldRow>
+      <DrawerTrigger label="memcpy 安全读法" title="packed 成员的安全读取">
+        <CodeBlock title="safe_read.c" code={SAFE_READ_CODE} />
+        <p>
+          协议、Flash 固定格式需要严格二进制布局时用 packed；但读 packed
+          成员前先确认目标内核是否支持非对齐访问 —— M0/M0+ 直接崩，M3/M4/M7 可用但有代价。
+        </p>
+      </DrawerTrigger>
+    </div>
+  )
+
+  const accessCanvas = (
+    <div className="space-y-4">
+      {outcome && picked ? (
+        <div className={`rounded-lg border px-4 py-4 ${RESULT_META[outcome.result].box}`}>
+          <p className={`text-xl font-bold ${RESULT_META[outcome.result].text}`}>
+            {RESULT_META[outcome.result].icon} {RESULT_META[outcome.result].label}
+          </p>
+          <p className="mt-1 text-sm text-secondary">{outcome.reason}</p>
+          <p className="mt-2 font-mono text-xs text-muted">
+            {CORE_LABELS[core]} · 读 {picked.name || '成员'} @ offset {picked.offset} · {picked.size} 字节访问
+          </p>
+        </div>
+      ) : (
+        <p className="text-xs text-muted">结构体为空 —— 回到「字节网格」实验添加成员，再来模拟访问。</p>
+      )}
+      <div>
+        <SectionLabel className="mb-2">Core Matrix · 内核支持矩阵</SectionLabel>
+        <RefTable
+          head={['内核', '硬件非对齐访问']}
+          rows={Object.entries(ALIGN_CORES).map(([k, v]) => [
+            CORE_LABELS[k],
+            v.unalignedSupport ? '✓ 支持（有代价）' : '✗ 故障',
+          ])}
+        />
+      </div>
+    </div>
+  )
+
+  // ---- 实验④ weak 符号 ----
+  const weakControl = (
+    <div className="space-y-5">
+      <div>
+        <SectionLabel className="mb-2 flex items-center gap-1.5">
+          Link Scene · 链接场景
+          <Principle title="什么是 weak 符号">
+            弱符号可被同名强符号覆盖；只有弱符号时链接照常通过并采用弱实现。STM32 HAL 的回调机制正是靠它。
+          </Principle>
+        </SectionLabel>
+        <Segmented
+          className="w-full"
+          options={Object.entries(WEAK_SCENES).map(([id, s]) => ({ id, label: s.label }))}
+          value={weakScene}
+          onChange={setWeakScene}
+        />
+      </div>
+      <DrawerTrigger label="AC5/AC6 兼容矩阵" title="weak 写法的 AC5/AC6 兼容性">
+        <RefTable
+          head={['写法', 'AC5', 'AC6', '说明']}
+          rows={WEAK_MATRIX.map((r) => [r.syntax, r.ac5, r.ac6, r.note])}
+        />
+        <p>
+          AC5 的 <code className="font-mono text-ink">__weak</code> 是编译器关键字不是宏，
+          <code className="font-mono text-ink">#ifndef __weak</code> 检测不到它。跨版本公共代码统一用
+          <code className="font-mono text-ink">__attribute__((weak))</code>。
+        </p>
+      </DrawerTrigger>
+      <DrawerTrigger label="HAL 回调示例" title="HAL weak 回调示例">
+        <CodeBlock title="hal_weak.c" code={HAL_WEAK_CODE} />
+      </DrawerTrigger>
+    </div>
+  )
+
+  const weakCanvas = (
+    <div className="space-y-4">
+      <WeakDiagram scene={WEAK_SCENES[weakScene]} />
+      <p className="max-w-xl text-xs leading-relaxed text-muted">
+        链接器按「强符号优先、弱符号兜底」解析同名符号 —— 上面切换三种场景，看结果如何变化。
+      </p>
+    </div>
+  )
 
   return (
-    <ModuleShell
-      kicker="Structs"
+    <Workbench
       title="结构体布局实验室"
-      subtitle="字节级观察结构体的对齐与填充：编辑成员实时画字节网格，对照笔记四形态，模拟非对齐访问在不同内核上的结局，再对照 pack 写法与 weak 符号链接。"
-    >
-      <section>
-        <h3 className="mb-1 text-sm font-semibold text-ink">结构体编辑器 · 字节网格</h3>
-        <p className="mb-3 text-xs text-muted">
-          增删成员、调整顺序，切换 packed / aligned —— 网格与统计实时更新
-        </p>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="min-w-0 rounded-lg border border-line bg-panel p-4">
-            {members.map((m, i) => (
-              <div key={m.id} className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="w-5 text-center font-mono text-xs text-muted">{i}</span>
-                <input
-                  type="text"
-                  value={m.name}
-                  onChange={(e) => updateMember(m.id, { name: e.target.value })}
-                  placeholder="成员名"
-                  spellCheck={false}
-                  className={`w-28 font-mono ${inputCls}`}
-                />
-                <select
-                  value={m.type}
-                  onChange={(e) => updateMember(m.id, { type: e.target.value })}
-                  className={`font-mono ${inputCls}`}
-                >
-                  {TYPE_KEYS.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <div className="ml-auto flex gap-1">
-                  <button type="button" title="上移" disabled={i === 0} onClick={() => moveMember(m.id, -1)} className={iconBtnCls}>
-                    <ArrowUp size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    title="下移"
-                    disabled={i === members.length - 1}
-                    onClick={() => moveMember(m.id, 1)}
-                    className={iconBtnCls}
-                  >
-                    <ArrowDown size={13} />
-                  </button>
-                  <button type="button" title="删除" onClick={() => removeMember(m.id)} className={iconBtnCls}>
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              </div>
-            ))}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={addMember}
-                className="flex items-center gap-1 rounded border border-accent bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25"
-              >
-                <Plus size={13} />
-                添加成员
-              </button>
-              <button
-                type="button"
-                onClick={() => setPacked(!packed)}
-                className={[
-                  'rounded border px-3 py-1 font-mono text-xs transition-colors',
-                  packed
-                    ? 'border-accent bg-accent/15 text-accent'
-                    : 'border-line bg-panel text-muted hover:border-accent hover:text-ink',
-                ].join(' ')}
-              >
-                packed: {packed ? '开' : '关'}
-              </button>
-              <label htmlFor="aligned-select" className="flex items-center gap-2 text-xs text-muted">
-                aligned
-                <select
-                  id="aligned-select"
-                  value={alignedStr}
-                  onChange={(e) => setAlignedStr(e.target.value)}
-                  className={`font-mono ${inputCls}`}
-                >
-                  <option value="">无</option>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="4">4</option>
-                  <option value="8">8</option>
-                </select>
-              </label>
-            </div>
-          </div>
-          <div className="min-w-0 rounded-lg border border-line bg-panel p-4">
-            <ByteGrid layout={layout} />
-          </div>
-        </div>
-        <div className="mt-3 rounded-lg border border-line bg-panel p-4">
-          <div className="flex flex-wrap gap-2">
-            {[`sizeof = ${layout.sizeof}`, `对齐 = ${layout.alignment}`, `padding = ${layout.padding} 字节`].map((c) => (
-              <span key={c} className="rounded border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-sm text-accent">
-                {c}
-              </span>
-            ))}
-          </div>
-          {layout.members.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1">
-              {layout.members.map((m, i) => (
-                <span key={i} className="font-mono text-xs text-ink">
-                  {m.name || '(未命名)'} @ {m.offset}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <h3 className="mb-1 text-sm font-semibold text-ink">笔记四形态对照表</h3>
-        <p className="mb-3 text-xs text-muted">
-          同一个 struct header（type + length）在四种修饰下的布局 —— 全部由 layoutStruct 实时计算
-        </p>
-        <button
-          type="button"
-          onClick={loadExample}
-          className="mb-3 rounded border border-accent bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25"
-        >
-          加载示例
-        </button>
-        <div className="overflow-x-auto rounded-lg border border-line bg-panel">
-          <table className="w-full border-collapse text-left">
-            <thead>
-              <tr className="border-b border-line bg-panel-2 text-xs text-muted">
-                <th className="px-3 py-2 font-semibold">形态</th>
-                <th className="px-3 py-2 font-semibold">length 偏移</th>
-                <th className="px-3 py-2 font-semibold">sizeof</th>
-                <th className="px-3 py-2 font-semibold">对齐</th>
-              </tr>
-            </thead>
-            <tbody>
-              {FORM_ROWS.map((f) => {
-                const l = layoutStruct(HEADER_EXAMPLE, f.opts)
-                const length = l.members.find((m) => m.name === 'length')
-                return (
-                  <tr key={f.label} className="border-b border-line last:border-b-0">
-                    <td className="px-3 py-2 font-mono text-xs text-ink">{f.label}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-emerald-400">{length ? length.offset : '—'}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-emerald-400">{l.sizeof}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-emerald-400">{l.alignment}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-3 space-y-3">
-          <Callout tone="tip" title="aligned(4) 不挪动内部成员">
-            aligned(4) 只要求整个结构体对象按 4 字节边界放置，不会把内部 length 从 offset 2 挪到 offset 4；尾部补齐是为了让数组中下一个元素仍满足对齐。
-          </Callout>
-          <Callout tone="tip" title="packed 管内部，aligned 管整体">
-            packed → 管内部成员布局；aligned(N) → 管整个类型/对象对齐；aligned(4) ≠ 每个成员都按 4 字节对齐。
-          </Callout>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="mb-1 text-sm font-semibold text-ink">非对齐访问故障模拟器</h3>
-        <p className="mb-3 text-xs text-muted">
-          选一个内核，从当前布局里挑一个成员，看这次读取是安全、变慢还是直接炸
-        </p>
-        <div className="rounded-lg border border-line bg-panel p-4">
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <label htmlFor="core-select" className="flex items-center gap-2 text-xs text-muted">
-              内核
-              <select id="core-select" value={core} onChange={(e) => setCore(e.target.value)} className={`font-mono ${inputCls}`}>
-                {Object.keys(ALIGN_CORES).map((k) => (
-                  <option key={k} value={k}>{CORE_LABELS[k]}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => setTrap(!trap)}
-              className={[
-                'rounded border px-3 py-1 font-mono text-xs transition-colors',
-                trap
-                  ? 'border-warn bg-warn/15 text-warn'
-                  : 'border-line bg-panel text-muted hover:border-warn hover:text-ink',
-              ].join(' ')}
-            >
-              UNALIGN_TRP: {trap ? '使能' : '关闭'}
-            </button>
-            <label htmlFor="pick-member" className="flex items-center gap-2 text-xs text-muted">
-              读取成员
-              <select
-                id="pick-member"
-                value={pickIdx >= 0 ? pickIdx : ''}
-                disabled={layout.members.length === 0}
-                onChange={(e) => setPickMember(Number(e.target.value))}
-                className={`font-mono ${inputCls} disabled:opacity-40`}
-              >
-                {layout.members.map((m, i) => (
-                  <option key={i} value={i}>
-                    {m.name || `成员 ${i + 1}`}（offset {m.offset} / {m.size} 字节）
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {outcome && picked ? (
-            <>
-              <div className={`rounded-lg border px-4 py-4 ${RESULT_META[outcome.result].box}`}>
-                <p className={`text-2xl font-bold ${RESULT_META[outcome.result].text}`}>
-                  {RESULT_META[outcome.result].icon} {RESULT_META[outcome.result].label}
-                </p>
-                <p className="mt-1 text-sm text-ink/85">{outcome.reason}</p>
-                <p className="mt-2 font-mono text-xs text-muted">
-                  {CORE_LABELS[core]} · 读 {picked.name || '成员'} @ offset {picked.offset} · {picked.size} 字节访问
-                </p>
-              </div>
-              {outcome.result === 'fault' && (
-                <div className="mt-3 space-y-3">
-                  <CodeBlock title="解法：用 memcpy 做字节级读取" code={SAFE_READ_CODE} />
-                  <Callout tone="warn" title="packed 前先想好目标内核">
-                    协议、Flash 固定格式需要严格二进制布局时用 packed；但读 packed 成员前先想好目标内核是否支持非对齐访问。M0/M0+ 直接崩，M3/M4/M7 可用但有代价。
-                  </Callout>
-                </div>
-              )}
-            </>
-          ) : (
-            <p className="text-xs text-muted">结构体为空 —— 先在上方编辑器添加成员，再来模拟访问。</p>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <h3 className="mb-1 text-sm font-semibold text-ink">三种 pack 写法 与 weak 符号</h3>
-        <p className="mb-3 text-xs text-muted">写法对照查表；weak 部分切换三种链接场景看链接器怎么选</p>
-        <div className="overflow-x-auto rounded-lg border border-line bg-panel">
-          <table className="w-full border-collapse text-left">
-            <thead>
-              <tr className="border-b border-line bg-panel-2 text-xs text-muted">
-                <th className="px-3 py-2 font-semibold">写法</th>
-                <th className="px-3 py-2 font-semibold">作用域</th>
-                <th className="px-3 py-2 font-semibold">说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PACK_ROWS.map((r) => (
-                <tr key={r.syntax} className="border-b border-line last:border-b-0">
-                  <td className="px-3 py-2 font-mono text-xs text-ink">{r.syntax}</td>
-                  <td className="px-3 py-2 text-xs text-muted">{r.scope}</td>
-                  <td className="px-3 py-2 text-xs text-muted">{r.desc}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-4 rounded-lg border border-line bg-panel p-4">
-          <div className="mb-3 flex flex-wrap gap-2">
-            {Object.entries(WEAK_SCENES).map(([id, s]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setWeakScene(id)}
-                className={[
-                  'rounded border px-3 py-1 text-xs transition-colors',
-                  weakScene === id
-                    ? 'border-accent bg-accent/15 text-accent'
-                    : 'border-line bg-panel text-muted hover:border-accent hover:text-ink',
-                ].join(' ')}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-          <WeakDiagram scene={WEAK_SCENES[weakScene]} />
-        </div>
-        <div className="mt-3">
-          <CodeBlock title="HAL weak 回调示例" code={HAL_WEAK_CODE} />
-        </div>
-      </section>
-
-      <section>
-        <h3 className="mb-1 text-sm font-semibold text-ink">AC5/AC6 兼容矩阵</h3>
-        <p className="mb-3 text-xs text-muted">weak 写法在两代编译器之间的差异 —— 跨版本代码只认最后一条</p>
-        <div className="overflow-x-auto rounded-lg border border-line bg-panel">
-          <table className="w-full border-collapse text-left">
-            <thead>
-              <tr className="border-b border-line bg-panel-2 text-xs text-muted">
-                <th className="px-3 py-2 font-semibold">写法</th>
-                <th className="px-3 py-2 font-semibold">AC5</th>
-                <th className="px-3 py-2 font-semibold">AC6</th>
-                <th className="px-3 py-2 font-semibold">说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {WEAK_MATRIX.map((r) => (
-                <tr key={r.syntax} className="border-b border-line last:border-b-0">
-                  <td className="px-3 py-2 font-mono text-xs text-ink">{r.syntax}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-muted">{r.ac5}</td>
-                  <td className={`px-3 py-2 font-mono text-xs ${r.ac6.startsWith('✓') ? 'text-emerald-400' : 'text-danger'}`}>
-                    {r.ac6}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-muted">{r.note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-3 space-y-3">
-          <Callout tone="tip" title="__weak 是关键字不是宏">
-            AC5 的 __weak 是编译器关键字不是宏，#ifndef __weak 检测不到它。自有库建议定义 NVSLITE_WEAK 这类独立名称，别重定义生态已有名称。
-          </Callout>
-          <Callout tone="ok" title="跨版本公共代码的统一写法">
-            AC5/AC6 公共代码推荐统一使用：__attribute__((weak))、__attribute__((packed))、__attribute__((aligned(x)))。
-          </Callout>
-        </div>
-      </section>
-    </ModuleShell>
+      tagline="左边改成员，右边看布局 —— 对齐、填充、非对齐访问与 weak 符号，全部可见"
+      experiments={[
+        { id: 'grid', label: '字节网格', control: gridControl, canvas: gridCanvas },
+        { id: 'forms', label: '四形态', control: formsControl, canvas: formsCanvas },
+        { id: 'access', label: '非对齐访问', control: accessControl, canvas: accessCanvas },
+        { id: 'weak', label: 'weak 符号', control: weakControl, canvas: weakCanvas },
+      ]}
+    />
   )
 }

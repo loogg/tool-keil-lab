@@ -1,15 +1,20 @@
 @import "tailwindcss";
 
+/* 设计令牌 v2（Linear/Vercel 气质）：近黑三层底 + 单一 indigo 强调 + 发丝描边。
+   令牌名与 v1 保持兼容，旧模块随令牌自动获得新配色。 */
 @theme {
-  --color-bg: #0a1120;
-  --color-panel: #0f1830;
-  --color-panel-2: #14203e;
-  --color-code: #0b1326;
-  --color-line: #23304f;
-  --color-ink: #e5ebf7;
-  --color-muted: #8b9bb8;
-  --color-accent: #2dd4bf;
+  --color-bg: #09090b;
+  --color-panel: #101013;
+  --color-panel-2: #16161a;
+  --color-code: #0c0c0f;
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-strong: rgba(255, 255, 255, 0.14);
+  --color-ink: #f4f4f5;
+  --color-secondary: #a1a1aa;
+  --color-muted: #52525b;
+  --color-accent: #818cf8;
   --color-accent-2: #38bdf8;
+  --color-ok: #34d399;
   --color-warn: #fbbf24;
   --color-danger: #f87171;
   --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
@@ -31,6 +36,6 @@ body {
 /* padding 斜纹 */
 .pad-stripes {
   background-image: repeating-linear-gradient(
-    45deg, rgba(251, 191, 36, 0.25) 0 4px, transparent 4px 8px
+    45deg, rgba(251, 191, 36, 0.22) 0 4px, transparent 4px 8px
   );
 }
