@@ -223,36 +223,43 @@ export function parseScatter(text) {
     let itemId = 0
 
     for (const line of lines) {
+      // Region 行：ER_IROM1 0x08000000 0x000C0000 { 或 ER_RODATA 0x080C0000 FIXED 0x00010000 {
+      // 如果已有 currentLR，尝试匹配 Region（无论是否有 FIXED/BLOCK）
+      const regionMatch = line.match(/^(\w+)\s+(0x[0-9a-fA-F]+)\s+(FIXED\s+|BLOCK\()?(\s*0x[0-9a-fA-F]+\)?)(\s+UNINIT)?(\s+PI)?(\s+OVERLAY)?(\s+UNION\s+\w+)?\s*\{/)
+      if (regionMatch && currentLR && !currentRegion) {
+        // 区分 LR 和 Region：如果名字以 LR_ 开头或是第一个顶层块，可能是 LR
+        // 否则视为 Region
+        const isLikelyLR = line.startsWith('LR_') || loadRegions.length === 0
+        if (!isLikelyLR || currentLR) {
+          const attrs = {
+            fixed: !!line.includes('FIXED'),
+            uninit: !!line.includes('UNINIT'),
+            block: !!line.includes('BLOCK'),
+            pi: !!line.includes(' PI'),
+            overlay: !!line.includes('OVERLAY'),
+          }
+          const unionMatch = line.match(/UNION\s+(\w+)/)
+          currentRegion = {
+            name: regionMatch[1],
+            base: parseInt(regionMatch[2], 16),
+            maxSize: parseInt(regionMatch[4].replace(/[^0-9a-fA-F]/g, ''), 16) || 0x10000,
+            attrs,
+            kind: 'ram',
+            note: '',
+            loadRegion: currentLR.name,
+            unionWith: unionMatch ? unionMatch[1] : null,
+          }
+          regions.push(currentRegion)
+          continue
+        }
+      }
+
       // LR 行：LR_IROM1 0x08000000 0x00100000 {
+      // 只有在没有 currentRegion 时才匹配 LR（避免 Region 被误判）
       const lrMatch = line.match(/^(\w+)\s+(0x[0-9a-fA-F]+)\s+(0x[0-9a-fA-F]+)\s*\{/)
       if (lrMatch && !currentRegion) {
         currentLR = { name: lrMatch[1], base: parseInt(lrMatch[2], 16), maxSize: parseInt(lrMatch[3], 16) }
         loadRegions.push(currentLR)
-        continue
-      }
-
-      // Region 行：ER_IROM1 0x08000000 0x000C0000 { 或 ER_RODATA 0x080C0000 FIXED 0x00010000 {
-      const regionMatch = line.match(/^(\w+)\s+(0x[0-9a-fA-F]+)\s+(FIXED\s+|BLOCK\()?(\s*0x[0-9a-fA-F]+\)?)(\s+UNINIT)?(\s+PI)?(\s+OVERLAY)?(\s+UNION\s+\w+)?\s*\{/)
-      if (regionMatch && currentLR) {
-        const attrs = {
-          fixed: !!line.includes('FIXED'),
-          uninit: !!line.includes('UNINIT'),
-          block: !!line.includes('BLOCK'),
-          pi: !!line.includes(' PI'),
-          overlay: !!line.includes('OVERLAY'),
-        }
-        const unionMatch = line.match(/UNION\s+(\w+)/)
-        currentRegion = {
-          name: regionMatch[1],
-          base: parseInt(regionMatch[2], 16),
-          maxSize: parseInt(regionMatch[3].replace(/[^0-9a-fA-F]/g, ''), 16) || 0x10000,
-          attrs,
-          kind: 'ram', // 默认，后续可推断
-          note: '',
-          loadRegion: currentLR.name,
-          unionWith: unionMatch ? unionMatch[1] : null,
-        }
-        regions.push(currentRegion)
         continue
       }
 
