@@ -391,6 +391,7 @@ export default function MemoryLabModule() {
                 {region.attrs.block && <span className="text-[10px] px-1 rounded border border-amber-400/40 bg-amber-400/10 text-amber-400">BLOCK</span>}
                 {region.attrs.pi && <span className="text-[10px] px-1 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-400">PI</span>}
                 {region.attrs.overlay && <span className="text-[10px] px-1 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-400">OVERLAY</span>}
+                {region.attrs.unionWith && <span className="text-[10px] px-1 rounded border border-purple-400/40 bg-purple-400/10 text-purple-300">UNION {region.attrs.unionWith}</span>}
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); setModel(removeRegion(model, region.name)) }}
@@ -552,13 +553,24 @@ export default function MemoryLabModule() {
         </div>
       )}
 
-      {/* Scatter 交互式查看器（联动高亮） */}
+      {/* Scatter 交互式查看器（联动高亮 + 语法切换） */}
       <div>
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>scatter 文件</SectionLabel>
-          <Button variant="ghost" onClick={() => setScatterEditMode(!scatterEditMode)}>
-            {scatterEditMode ? '预览' : '编辑'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Segmented
+              options={[
+                { id: 'sct', label: 'Keil (.sct)' },
+                { id: 'ld', label: 'GCC (.ld)' },
+                { id: 'icf', label: 'IAR (.icf)' },
+              ]}
+              value={syntaxTab}
+              onChange={setSyntaxTab}
+            />
+            <Button variant="ghost" onClick={() => setScatterEditMode(!scatterEditMode)}>
+              {scatterEditMode ? '预览' : '编辑'}
+            </Button>
+          </div>
         </div>
         {scatterEditMode ? (
           <div>
@@ -574,7 +586,7 @@ export default function MemoryLabModule() {
               <Button variant="ghost" onClick={() => setScatterEditMode(false)}>重置</Button>
             </div>
           </div>
-        ) : (
+        ) : syntaxTab === 'sct' ? (
           <div className="rounded-lg border border-line bg-code p-3 font-mono text-xs space-y-3">
             {/* Load Region 级别 */}
             {(() => {
@@ -592,10 +604,16 @@ export default function MemoryLabModule() {
                     {lrRegions.map((region) => {
                       const isHl = hlRegion === region.name
                       const regionItems = model.items.filter((i) => i.region === region.name)
+                      // UNION 高亮：如果 region 有 unionWith 属性，用特殊颜色
+                      const isUnion = !!region.attrs.unionWith || regions.some(r => r.attrs.unionWith === region.name)
                       return (
                         <div key={region.name}>
                           <div
-                            className={`cursor-pointer rounded px-2 py-1 transition-colors ${isHl ? 'bg-accent/20 text-accent' : 'text-ink hover:bg-panel-2'}`}
+                            className={`cursor-pointer rounded px-2 py-1 transition-colors ${
+                              isHl ? 'bg-accent/20 text-accent' :
+                              isUnion ? 'bg-purple-500/10 text-purple-300 hover:bg-purple-500/20' :
+                              'text-ink hover:bg-panel-2'
+                            }`}
                             onClick={() => { setHlRegion(isHl ? null : region.name); setHlItem(null) }}
                           >
                             {'  '}{region.name} {hex(region.base)}
@@ -604,6 +622,7 @@ export default function MemoryLabModule() {
                             {region.attrs.block ? ` BLOCK(${hex(region.maxSize)})` : ''}
                             {region.attrs.pi ? ' PI' : ''}
                             {region.attrs.overlay ? ' OVERLAY' : ''}
+                            {region.attrs.unionWith ? ` UNION ${region.attrs.unionWith}` : ''}
                             {' {'}
                             <span className="text-ink/40">  ; {region.note || region.kind}</span>
                           </div>
@@ -612,7 +631,7 @@ export default function MemoryLabModule() {
                             return (
                               <div
                                 key={item.id}
-                                className={`cursor-pointer rounded px-2 py-0.5 transition-colors ${itemHl ? 'bg-accent/20 text-accent' : 'text-ink/80 hover:bg-panel-2'}`}
+                                className={`cursor-pointer rounded px-2 py-0.5 transition-colors ${itemHl ? 'bg-accent/20 text-accent' : isUnion ? 'text-purple-200/80 hover:bg-purple-500/10' : 'text-ink/80 hover:bg-panel-2'}`}
                                 style={{ paddingLeft: '2.5rem' }}
                                 onClick={() => { setHlItem(itemHl ? null : item.id); setHlRegion(region.name) }}
                               >
@@ -630,6 +649,11 @@ export default function MemoryLabModule() {
               })
             })()}
           </div>
+        ) : (
+          <CodeBlock
+            title={syntaxTab === 'ld' ? 'GCC 链接脚本 (.ld)' : 'IAR 配置 (.icf)'}
+            code={syntaxTab === 'ld' ? generateLd(model) : generateIcf(model)}
+          />
         )}
       </div>
 

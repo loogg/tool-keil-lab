@@ -195,7 +195,7 @@ export function generateScatter(model) {
       if (region.attrs.uninit) attrs.push('UNINIT')
       if (region.attrs.pi) attrs.push('PI')
       if (region.attrs.overlay) attrs.push('OVERLAY')
-      if (region.unionWith) attrs.push(`UNION ${region.unionWith}`)
+      if (region.attrs.unionWith) attrs.push(`UNION ${region.attrs.unionWith}`)
 
       lines.push(`  ${region.name} ${HEX(region.base)} ${attrs.join(' ')}  {  ; ${region.note || region.kind}`)
       lines.push(...linesIn(region.name))

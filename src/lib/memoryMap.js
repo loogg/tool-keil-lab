@@ -74,7 +74,7 @@ export function createUnionModel() {
   const model = createDefaultModel()
   // 让 CCRAM 与 IRAM1 的某段重叠（教学演示）
   model.regions = model.regions.map((r) =>
-    r.name === 'RW_CCRAM' ? { ...r, unionWith: 'RW_IRAM1', note: '紧耦合 RAM（与 IRAM1 UNION 演示）' } : r
+    r.name === 'RW_CCRAM' ? { ...r, attrs: { ...r.attrs, unionWith: 'RW_IRAM1' }, note: '紧耦合 RAM（与 IRAM1 UNION 演示）' } : r
   )
   return model
 }
