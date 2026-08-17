@@ -291,20 +291,20 @@ export default function MemoryLabModule() {
                           value={newItemLabelInline}
                           onChange={(e) => setNewItemLabelInline(e.target.value)}
                           placeholder="section 标签（如 .text, .data）"
-                          className="flex-1 text-xs"
+                          className="flex-1 min-w-[80px] text-xs"
                           autoFocus
                         />
                         <TextInput
                           value={newItemSizeInline}
                           onChange={(e) => setNewItemSizeInline(e.target.value)}
                           placeholder="大小"
-                          className="w-20 text-xs"
+                          className="w-1/4 min-w-[60px] text-xs"
                         />
                         <button
                           type="button"
                           onClick={() => confirmAddSection(region.name)}
                           disabled={!newItemLabelInline}
-                          className="flex items-center justify-center w-7 h-7 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                          className="flex items-center justify-center w-7 h-7 shrink-0 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                           title="确认添加"
                         >
                           ✓
@@ -312,7 +312,7 @@ export default function MemoryLabModule() {
                         <button
                           type="button"
                           onClick={() => setAddingInSection(null)}
-                          className="flex items-center justify-center w-7 h-7 rounded border border-line text-muted hover:text-ink transition-colors"
+                          className="flex items-center justify-center w-7 h-7 shrink-0 rounded border border-line text-muted hover:text-ink transition-colors"
                           title="取消"
                         >
                           ×
