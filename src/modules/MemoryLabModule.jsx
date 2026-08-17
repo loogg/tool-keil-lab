@@ -70,6 +70,10 @@ export default function MemoryLabModule() {
   const [addr, setAddr] = useState('0x080E0000')
   const [addrErr, setAddrErr] = useState(false)
 
+  // 左右联动高亮：点击左侧 region/section → 右侧对应区域高亮
+  const [hlRegion, setHlRegion] = useState(null)   // 当前高亮的 region name
+  const [hlItem, setHlItem] = useState(null)       // 当前高亮的 section item id
+
   // 场景切换
   const switchScene = (sceneId) => {
     const sceneObj = SCENES.find((s) => s.id === sceneId)
@@ -244,8 +248,12 @@ export default function MemoryLabModule() {
             <div key={region.name} className="rounded-lg border border-line bg-panel overflow-hidden">
               {/* Region 行 */}
               <div
-                className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-panel-2 transition-colors"
-                onClick={() => toggleRegion(region.name)}
+                className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
+                  hlRegion === region.name
+                    ? 'bg-accent/10 border-l-2 border-l-accent'
+                    : 'hover:bg-panel-2 border-l-2 border-l-transparent'
+                }`}
+                onClick={() => { toggleRegion(region.name); setHlRegion(hlRegion === region.name ? null : region.name); setHlItem(null) }}
                 onDragOver={(e) => handleDragOver(e, region.name)}
                 onDragLeave={handleDragLeave}
                 onDrop={() => handleDrop(region.name)}
@@ -255,6 +263,9 @@ export default function MemoryLabModule() {
                 <span className="text-xs text-muted">{fmtSize(region.maxSize)}</span>
                 {region.attrs.fixed && <span className="text-[10px] px-1 rounded border border-warn/40 bg-warn/10 text-warn">FIXED</span>}
                 {region.attrs.uninit && <span className="text-[10px] px-1 rounded border border-accent-2/40 bg-accent-2/10 text-accent-2">UNINIT</span>}
+                {region.attrs.block && <span className="text-[10px] px-1 rounded border border-amber-400/40 bg-amber-400/10 text-amber-400">BLOCK</span>}
+                {region.attrs.pi && <span className="text-[10px] px-1 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-400">PI</span>}
+                {region.attrs.overlay && <span className="text-[10px] px-1 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-400">OVERLAY</span>}
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); setModel(removeRegion(model, region.name)) }}
@@ -273,14 +284,19 @@ export default function MemoryLabModule() {
                       key={item.id}
                       draggable
                       onDragStart={() => handleDragStart(item.id)}
-                      className="group flex items-center gap-2 pl-8 pr-3 py-1.5 hover:bg-panel-2 cursor-move transition-colors"
+                      className={`group flex items-center gap-2 pl-8 pr-3 py-1.5 cursor-move transition-colors ${
+                        hlItem === item.id
+                          ? 'bg-accent/10 border-l-2 border-l-accent'
+                          : 'hover:bg-panel-2 border-l-2 border-l-transparent'
+                      }`}
+                      onClick={() => { setHlItem(hlItem === item.id ? null : item.id); setHlRegion(region.name) }}
                     >
                       <span className="text-xs text-muted">├</span>
                       <span className="flex-1 font-mono text-xs text-ink truncate">{item.label}</span>
                       <span className="text-xs text-muted">{fmtKB(item.size)}</span>
                       <button
                         type="button"
-                        onClick={() => setModel(removeItem(model, item.id))}
+                        onClick={(e) => { e.stopPropagation(); setModel(removeItem(model, item.id)) }}
                         className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger/80 transition-opacity"
                         title="删除 Section"
                       >
@@ -431,6 +447,7 @@ export default function MemoryLabModule() {
         </div>
       )}
 
+      {/* Scatter 交互式查看器（联动高亮） */}
       <div>
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>scatter 文件</SectionLabel>
@@ -453,19 +470,78 @@ export default function MemoryLabModule() {
             </div>
           </div>
         ) : (
-          <CodeBlock title="target.sct" code={scatterText} />
+          <div className="rounded-lg border border-line bg-code p-3 font-mono text-xs space-y-3">
+            {/* Load Region 级别 */}
+            {(() => {
+              const lrGroups = {}
+              for (const region of regions) {
+                const lr = region.loadRegion || 'LR_DEFAULT'
+                if (!lrGroups[lr]) lrGroups[lr] = []
+                lrGroups[lr].push(region)
+              }
+              return Object.entries(lrGroups).sort((a, b) => a[0].localeCompare(b[0])).map(([lrName, lrRegions]) => {
+                const lr = (model.loadRegions || []).find((l) => l.name === lrName)
+                return (
+                  <div key={lrName} className="space-y-1">
+                    <div className="text-ink/60">{lrName} {lr ? hex(lr.base) + ' ' + hex(lr.maxSize) : ''} {'{'}</div>
+                    {lrRegions.map((region) => {
+                      const isHl = hlRegion === region.name
+                      const regionItems = model.items.filter((i) => i.region === region.name)
+                      return (
+                        <div key={region.name}>
+                          <div
+                            className={`cursor-pointer rounded px-2 py-1 transition-colors ${isHl ? 'bg-accent/20 text-accent' : 'text-ink hover:bg-panel-2'}`}
+                            onClick={() => { setHlRegion(isHl ? null : region.name); setHlItem(null) }}
+                          >
+                            {'  '}{region.name} {hex(region.base)}
+                            {region.attrs.fixed ? ` FIXED ${hex(region.maxSize)}` : ` ${hex(region.maxSize)}`}
+                            {region.attrs.uninit ? ' UNINIT' : ''}
+                            {region.attrs.block ? ` BLOCK(${hex(region.maxSize)})` : ''}
+                            {region.attrs.pi ? ' PI' : ''}
+                            {region.attrs.overlay ? ' OVERLAY' : ''}
+                            {' {'}
+                            <span className="text-ink/40">  ; {region.note || region.kind}</span>
+                          </div>
+                          {regionItems.map((item) => {
+                            const itemHl = hlItem === item.id
+                            return (
+                              <div
+                                key={item.id}
+                                className={`cursor-pointer rounded px-2 py-0.5 transition-colors ${itemHl ? 'bg-accent/20 text-accent' : 'text-ink/80 hover:bg-panel-2'}`}
+                                style={{ paddingLeft: '2.5rem' }}
+                                onClick={() => { setHlItem(itemHl ? null : item.id); setHlRegion(region.name) }}
+                              >
+                                {item.label.includes('.o') ? '    ' : '   '}{item.label}
+                              </div>
+                            )
+                          })}
+                          <div className="text-ink/60">{'  }'}</div>
+                        </div>
+                      )
+                    })}
+                    <div className="text-ink/60">{'}'}</div>
+                  </div>
+                )
+              })
+            })()}
+          </div>
         )}
       </div>
 
-      {/* Region 占用可视化（第二层：偏移 + 碎片） */}
+      {/* Region 占用详情（联动高亮） */}
       <div>
         <SectionLabel className="mb-2">Region 占用详情</SectionLabel>
         <div className="space-y-2">
           {regions.map((region) => {
             const layout = regionLayout(model, region.name)
             const overflow = overflowDetail(model, region.name)
+            const isHl = hlRegion === region.name
             return (
-              <div key={region.name} className="rounded border border-line bg-panel p-3">
+              <div
+                key={region.name}
+                className={`rounded border bg-panel p-3 cursor-pointer transition-all ${isHl ? 'border-accent ring-1 ring-accent/30' : 'border-line'}`}
+                onClick={() => { setHlRegion(isHl ? null : region.name); setHlItem(null) }}
+              >
                 <div className="mb-2 flex items-center justify-between">
                   <span className="font-mono text-sm font-semibold text-ink">{region.name}</span>
                   <span className={`text-xs ${layout.overflow ? 'text-danger' : 'text-muted'}`}>
@@ -474,18 +550,23 @@ export default function MemoryLabModule() {
                 </div>
                 {/* 偏移可视化条 */}
                 <div className="relative h-6 overflow-hidden rounded bg-panel-2">
-                  {layout.items.map((item, i) => (
-                    <div
-                      key={item.id}
-                      className="absolute top-0 h-full border-r border-bg/50"
-                      style={{
-                        left: `${(item.offset / layout.limit) * 100}%`,
-                        width: `${(item.size / layout.limit) * 100}%`,
-                        background: i % 2 === 0 ? '#818cf8' : '#3b82f6',
-                      }}
-                      title={`${item.label} @ ${hex(item.offset)} (${fmtSize(item.size)})`}
-                    />
-                  ))}
+                  {layout.items.map((item, i) => {
+                    const itemHl = hlItem === item.id
+                    return (
+                      <div
+                        key={item.id}
+                        className={`absolute top-0 h-full border-r border-bg/50 transition-all ${itemHl ? 'z-10 ring-2 ring-accent' : ''}`}
+                        style={{
+                          left: `${(item.offset / layout.limit) * 100}%`,
+                          width: `${(item.size / layout.limit) * 100}%`,
+                          background: itemHl ? '#818cf8' : (i % 2 === 0 ? '#3b82f6' : '#6366f1'),
+                          opacity: hlItem && !itemHl ? 0.3 : 1,
+                        }}
+                        title={`${item.label} @ ${hex(item.offset)} (${fmtSize(item.size)})`}
+                        onClick={(e) => { e.stopPropagation(); setHlItem(itemHl ? null : item.id); setHlRegion(region.name) }}
+                      />
+                    )
+                  })}
                   {layout.gaps.map((gap, i) => (
                     <div
                       key={`gap-${i}`}
