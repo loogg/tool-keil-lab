@@ -216,7 +216,10 @@ function SectionKindButton({ kind, selected, onClick }) {
 // GCC .ld 交互视图：MEMORY/SECTIONS 逐行点击，与左侧树 / Region 占用联动高亮
 // 行内容与 generateLd 一致（含 region 行、item 行），仅额外提供点击高亮
 function LdInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setHlItem }) {
-  const clickRegion = (name) => { setHlRegion(hlRegion === name ? null : name); setHlItem(null) }
+  const clickRegion = (name) => {
+    // 与模块内 selectRegion 相同：正聚焦 section 时点 region 是「切换」而非「取消」
+    if (hlItem !== null) { setHlItem(null); setHlRegion(name) } else { setHlRegion(hlRegion === name ? null : name) }
+  }
   const clickItem = (itemId, regionName) => { setHlItem(hlItem === itemId ? null : itemId); setHlRegion(regionName) }
   const regionClass = (name) =>
     `cursor-pointer rounded px-2 py-0.5 transition-colors ${
@@ -247,11 +250,12 @@ function LdInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setH
         lrRegions.map((region) => {
           const items = model.items.filter((i) => i.region === region.name)
           if (items.length === 0) return null
-          const sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
+          let sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
+          if (!sectionName.startsWith('.')) sectionName = `.${sectionName}`
           return (
             <div key={region.name} className="mt-1">
               <div className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
-                {`  .${sectionName}${region.attrs.uninit ? ' (NOLOAD)' : ''} : {`}
+                {`  ${sectionName}${region.attrs.uninit ? ' (NOLOAD)' : ''} : {`}
               </div>
               {items.map((item) =>
                 ldItemLines(item).map((line, li) => (
@@ -281,7 +285,10 @@ function LdInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setH
 
 // IAR .icf 交互视图：define region / place in 行点击高亮，placement 按 section 粒度可点
 function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setHlItem }) {
-  const clickRegion = (name) => { setHlRegion(hlRegion === name ? null : name); setHlItem(null) }
+  const clickRegion = (name) => {
+    // 与模块内 selectRegion 相同：正聚焦 section 时点 region 是「切换」而非「取消」
+    if (hlItem !== null) { setHlItem(null); setHlRegion(name) } else { setHlRegion(hlRegion === name ? null : name) }
+  }
   const clickItem = (itemId, regionName) => { setHlItem(hlItem === itemId ? null : itemId); setHlRegion(regionName) }
   const regionClass = (name) =>
     `cursor-pointer rounded px-2 py-0.5 transition-colors ${
@@ -341,13 +348,15 @@ function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, set
             )
           }
 
-          if (restItems.length === 0 && vectorItems.length === 0) {
+          // 无 icf 对应 placement 的旧式 item 不渲染 span，避免出现 ", ," 伪影
+          const placeItems = restItems.filter((i) => icfItemPlacements(i).length > 0)
+          if (placeItems.length === 0 && vectorItems.length === 0) {
             rows.push(
               <div key={`${region.name}-default`} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
                 {`place in ${region.name} { ${region.kind === 'flash' ? 'readonly' : 'readwrite'} };`}
               </div>
             )
-          } else if (restItems.length > 0) {
+          } else if (placeItems.length > 0) {
             rows.push(
               <div
                 key={`${region.name}-place`}
@@ -359,7 +368,7 @@ function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, set
                 >
                   {`place in ${region.name} { `}
                 </span>
-                {restItems.map((item, idx) => (
+                {placeItems.map((item, idx) => (
                   <span key={item.id}>
                     <span
                       className={`cursor-pointer rounded ${
@@ -373,7 +382,7 @@ function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, set
                     >
                       {icfItemPlacements(item).join(', ')}
                     </span>
-                    {idx < restItems.length - 1 && <span className="text-ink/60">, </span>}
+                    {idx < placeItems.length - 1 && <span className="text-ink/60">, </span>}
                   </span>
                 ))}
                 <span className={hlRegion === region.name ? 'text-accent' : 'text-ink'}>{' };'}</span>
@@ -498,6 +507,17 @@ export default function MemoryLabModule() {
   // 左右联动高亮：点击左侧 region/section → 右侧对应区域高亮
   const [hlRegion, setHlRegion] = useState(null)   // 当前高亮的 region name
   const [hlItem, setHlItem] = useState(null)       // 当前高亮的 section item id
+
+  // 点击 region 的统一语义：若当前正聚焦某个 section（hlItem 非空），
+  // 视为「切换焦点到这个 region」而不是取消高亮——否则联动高亮下点哪灭哪，观感乱跳
+  const selectRegion = (name) => {
+    if (hlItem !== null) {
+      setHlItem(null)
+      setHlRegion(name)
+    } else {
+      setHlRegion(hlRegion === name ? null : name)
+    }
+  }
 
   // 场景切换
   const switchScene = (sceneId) => {
@@ -698,12 +718,18 @@ export default function MemoryLabModule() {
                     ? 'bg-accent/10 border-l-2 border-l-accent'
                     : 'hover:bg-panel-2 border-l-2 border-l-transparent'
                 }`}
-                onClick={() => { toggleRegion(region.name); setHlRegion(hlRegion === region.name ? null : region.name); setHlItem(null) }}
+                onClick={() => selectRegion(region.name)}
                 onDragOver={(e) => handleDragOver(e, region.name)}
                 onDragLeave={handleDragLeave}
                 onDrop={() => handleDrop(region.name)}
               >
-                <span className={`text-xs transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+                {/* 展开/折叠只由箭头触发，避免点行高亮时列表突然折叠造成跳动 */}
+                <span
+                  className={`cursor-pointer text-xs transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); toggleRegion(region.name) }}
+                >
+                  ▶
+                </span>
                 <span className="flex-1 font-mono text-sm font-semibold text-ink">{region.name}</span>
                 <span className="text-xs text-muted">{fmtSize(region.maxSize)}</span>
                 {region.attrs.fixed && <span className="text-[10px] px-1 rounded border border-warn/40 bg-warn/10 text-warn">FIXED</span>}
@@ -957,7 +983,7 @@ export default function MemoryLabModule() {
                               isUnion ? 'bg-purple-500/10 text-purple-300 hover:bg-purple-500/20' :
                               'text-ink hover:bg-panel-2'
                             }`}
-                            onClick={() => { setHlRegion(isHl ? null : region.name); setHlItem(null) }}
+                            onClick={() => selectRegion(region.name)}
                           >
                             {'  '}{region.name} {hex(region.base)}
                             {region.attrs.fixed ? ` FIXED ${hex(region.maxSize)}` : ` ${hex(region.maxSize)}`}
@@ -1025,7 +1051,7 @@ export default function MemoryLabModule() {
               <div
                 key={region.name}
                 className={`rounded border bg-panel p-3 cursor-pointer transition-all ${isHl ? 'border-accent ring-1 ring-accent/30' : 'border-line'}`}
-                onClick={() => { setHlRegion(isHl ? null : region.name); setHlItem(null) }}
+                onClick={() => selectRegion(region.name)}
               >
                 <div className="mb-2 flex items-center justify-between">
                   <span className="font-mono text-sm font-semibold text-ink">{region.name}</span>

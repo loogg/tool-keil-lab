@@ -153,7 +153,8 @@ export function generateLd(model) {
       if (items.length === 0) continue
 
       // 简化映射：section 名 → ld 段名；UNINIT 区域用官方 (NOLOAD) 段类型
-      const sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
+      let sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
+      if (!sectionName.startsWith('.')) sectionName = `.${sectionName}`
       const noLoad = region.attrs.uninit ? ' (NOLOAD)' : ''
       lines.push(`  ${sectionName}${noLoad} : {`)
       for (const item of items) {
@@ -213,7 +214,10 @@ export function generateIcf(model) {
       for (const item of restItems) {
         placements.push(...icfItemPlacements(item))
       }
-      lines.push(`place in ${region.name} { ${[...new Set(placements)].join(', ')} };`)
+      // 个别旧式 label 在 icf 中无对应 placement，跳过避免输出 "{  }"/", ,"
+      if (placements.length > 0) {
+        lines.push(`place in ${region.name} { ${[...new Set(placements)].join(', ')} };`)
+      }
     }
   }
 

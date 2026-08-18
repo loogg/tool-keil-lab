@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createDefaultModel, addItem } from './memoryMap.js'
+import { createDefaultModel, addItem, addRegion } from './memoryMap.js'
 import {
   generateScatter, generateLd, generateIcf,
   parseScatter, parseLd, parseIcf,
@@ -275,6 +275,18 @@ describe('语义 kind：左侧添加一次，三种格式各自生成官方语�
 
   it('uninit region → ld 输出段带官方 (NOLOAD) 类型', () => {
     expect(generateLd(createDefaultModel())).toMatch(/\.sdram_noinit \(NOLOAD\) : \{/)
+  })
+
+  it('无 er_/rw_ 前缀的 region：ld 段名带单个前导点且可解析回（真实文件区域名如 XPI0）', () => {
+    let m = createDefaultModel()
+    m = addRegion(m, { name: 'XPI0', base: 0x80000000, maxSize: 0x100000, kind: 'flash' })
+    m = addItem(m, { label: '', region: 'XPI0', size: 0x100, kind: 'ro' })
+    const text = generateLd(m)
+    expect(text).toContain('.xpi0 : {')
+    expect(text).not.toContain('..xpi0')
+    const parsed = parseLd(text)
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.items.some((i) => i.region === 'XPI0')).toBe(true)
   })
 
   it('round-trip：kind item 生成的 ld 合法且可被 parseLd 解析', () => {
