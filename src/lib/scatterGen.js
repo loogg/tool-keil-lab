@@ -230,7 +230,10 @@ export function detectLinkerSyntax(text) {
 // 返回 model 或 { error: string }
 export function parseScatter(text) {
   try {
-    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith(';'))
+    // 保留原始行号（用于「原文预览」把解析结果映射回用户粘贴的原始行）
+    const lines = text.split('\n')
+      .map((raw, idx) => ({ text: raw.trim(), idx }))
+      .filter((l) => l.text && !l.text.startsWith(';'))
     const loadRegions = []
     const regions = []
     const items = []
@@ -239,7 +242,9 @@ export function parseScatter(text) {
     let currentRegion = null
     let itemId = 0
 
-    for (const line of lines) {
+    for (const entry of lines) {
+      const line = entry.text
+      const lineIdx = entry.idx
       // Region 行：ER_IROM1 0x08000000 0x000C0000 { 或 ER_RODATA 0x080C0000 FIXED 0x00010000 {
       // 如果已有 currentLR，尝试匹配 Region（无论是否有 FIXED/BLOCK）
       const regionMatch = line.match(/^(\w+)\s+(0x[0-9a-fA-F]+)\s+(FIXED\s+|BLOCK\()?(\s*0x[0-9a-fA-F]+\)?)(\s+UNINIT)?(\s+PI)?(\s+OVERLAY)?(\s+UNION\s+\w+)?\s*\{/)
@@ -265,6 +270,7 @@ export function parseScatter(text) {
             note: '',
             loadRegion: currentLR.name,
             unionWith: unionMatch ? unionMatch[1] : null,
+            line: lineIdx,
           }
           regions.push(currentRegion)
           continue
@@ -291,6 +297,8 @@ export function parseScatter(text) {
           region: currentRegion.name,
           size: 0x1000, // 默认值
           custom: true,
+          lineStart: lineIdx,
+          lineEnd: lineIdx,
         })
       }
 
@@ -331,21 +339,25 @@ function parseLdSize(value) {
 // 一个输出 section（.text/.data/... 块）映射为一个 item，挂在 "> REGION" 指定的 MEMORY 区域下
 export function parseLd(text) {
   try {
-    // 去掉 /* */ 与 // 注释，避免行尾注释干扰匹配
-    const cleaned = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    // 去掉 /* */ 与 // 注释，避免行尾注释干扰匹配；保留换行以维持行号
+    // （行号用于「原文预览」把解析结果映射回用户粘贴的原始行）
+    const cleaned = text
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''))
+      .replace(/\/\/[^\n]*/g, '')
     const lines = cleaned.split('\n')
 
     const regions = []
     const items = []
     let inMemory = false
     let inSections = false
-    let depth = 0            // SECTIONS 块内的花括号深度
-    let sectionName = null   // 正在解析的输出 section 名（不含开头的点）
-    let sectionAttrs = ''    // NOLOAD / COPY 等类型标记
+    let depth = 0               // SECTIONS 块内的花括号深度
+    let sectionName = null      // 正在解析的输出 section 名（不含开头的点）
+    let sectionAttrs = ''       // NOLOAD / COPY 等类型标记
+    let sectionStartLine = -1   // 当前 section 头部行号
     let itemId = 0
 
-    for (const rawLine of lines) {
-      const line = rawLine.trim()
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const line = lines[lineIdx].trim()
       if (!line) continue
 
       // ---- MEMORY 块 ----
@@ -372,6 +384,7 @@ export function parseLd(text) {
             kind: memAttrs.includes('w') ? 'ram' : 'flash',
             note: size === null ? `LENGTH=${memMatch[5]}（符号，使用默认大小）` : '',
             loadRegion: 'LR_DEFAULT',
+            line: lineIdx,
           })
         }
         continue
@@ -395,6 +408,7 @@ export function parseLd(text) {
         if (hdr && line.includes(':')) {
           sectionName = hdr[1]
           sectionAttrs = hdr[2] ? hdr[2].replace(/[()]/g, '') : ''
+          sectionStartLine = lineIdx
         }
       }
 
@@ -436,10 +450,13 @@ export function parseLd(text) {
             region: region.name,
             size: 0x1000,
             custom: true,
+            lineStart: sectionStartLine,
+            lineEnd: lineIdx,
           })
         }
         sectionName = null
         sectionAttrs = ''
+        sectionStartLine = -1
       }
     }
 
@@ -473,8 +490,8 @@ export function parseIcf(text) {
     let itemId = 0
 
     // 第一遍：解析 define region
-    for (const line of lines) {
-      const trimmed = line.trim()
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const trimmed = lines[lineIdx].trim()
       if (trimmed.startsWith('//') || !trimmed) continue
 
       // define region ER_IROM1 = mem:[from 0x08000000 size 0xC0000];
@@ -488,13 +505,14 @@ export function parseIcf(text) {
           kind: 'ram',
           note: '',
           loadRegion: 'LR_DEFAULT',
+          line: lineIdx,
         })
       }
     }
 
     // 第二遍：解析 place in
-    for (const line of lines) {
-      const trimmed = line.trim()
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const trimmed = lines[lineIdx].trim()
       if (trimmed.startsWith('//') || !trimmed) continue
 
       // place in ER_IROM1 { readonly };
@@ -514,6 +532,8 @@ export function parseIcf(text) {
                 region: regionName,
                 size: 0x1000,
                 custom: true,
+                lineStart: lineIdx,
+                lineEnd: lineIdx,
               })
             } else if (placement.startsWith('section')) {
               const sectionName = placement.replace('section', '').trim()
@@ -524,6 +544,8 @@ export function parseIcf(text) {
                 region: regionName,
                 size: 0x1000,
                 custom: true,
+                lineStart: lineIdx,
+                lineEnd: lineIdx,
               })
             }
           }

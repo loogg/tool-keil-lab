@@ -318,6 +318,71 @@ function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, set
   )
 }
 
+// 原文预览视图：应用用户粘贴的文本后，预览保留原文（注释/符号表达式原样），
+// 解析出的 region/section 通过行号映射回原文行，点击与左侧树 / Region 占用联动高亮
+function ManualTextView({ text, model, hlRegion, hlItem, setHlRegion, setHlItem }) {
+  // lineIdx → 该行对应的解析实体（region 行 / item 行，icf 中一行可能挂多个 item）
+  const lineEntries = new Map()
+  const addEntry = (idx, entry) => {
+    if (!Number.isInteger(idx) || idx < 0) return
+    if (!lineEntries.has(idx)) lineEntries.set(idx, [])
+    lineEntries.get(idx).push(entry)
+  }
+  for (const region of model.regions) addEntry(region.line, { type: 'region', region: region.name })
+  for (const item of model.items) {
+    if (Number.isInteger(item.lineStart) && Number.isInteger(item.lineEnd)) {
+      for (let i = item.lineStart; i <= item.lineEnd; i++) {
+        addEntry(i, { type: 'item', itemId: item.id, region: item.region })
+      }
+    }
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-line bg-code p-3 font-mono text-xs">
+      {text.split('\n').map((lineText, idx) => {
+        const entries = lineEntries.get(idx) || []
+        const regionEntry = entries.find((e) => e.type === 'region')
+        const itemEntry = entries.find((e) => e.type === 'item')
+
+        if (regionEntry) {
+          const active = hlRegion === regionEntry.region
+          return (
+            <div
+              key={idx}
+              className={`cursor-pointer whitespace-pre rounded px-1 transition-colors ${
+                active ? 'bg-accent/20 text-accent' : 'text-ink hover:bg-panel-2'
+              }`}
+              onClick={() => { setHlRegion(active ? null : regionEntry.region); setHlItem(null) }}
+            >
+              {lineText || ' '}
+            </div>
+          )
+        }
+        if (itemEntry) {
+          const active = hlItem === itemEntry.itemId
+          return (
+            <div
+              key={idx}
+              className={`cursor-pointer whitespace-pre rounded px-1 transition-colors ${
+                active ? 'bg-accent/20 text-accent' : 'text-ink/80 hover:bg-panel-2'
+              }`}
+              onClick={() => { setHlItem(active ? null : itemEntry.itemId); setHlRegion(itemEntry.region) }}
+            >
+              {lineText || ' '}
+            </div>
+          )
+        }
+        // 未参与解析的行（注释、符号赋值、PROVIDE、ASSERT 等）：原样弱化显示
+        return (
+          <div key={idx} className="whitespace-pre rounded px-1 text-ink/45">
+            {lineText || ' '}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function MemoryLabModule() {
   // 核心状态
   const [scene, setScene] = useState('default')
@@ -328,8 +393,8 @@ export default function MemoryLabModule() {
   const [manualScatterText, setManualScatterText] = useState('')
   // 手动文本已被编辑/粘贴且尚未应用：为 true 时切换编辑/预览不得覆盖原文
   const [manualDirty, setManualDirty] = useState(false)
-  // 应用成功后的提示（解释预览文本为重新生成）
-  const [applyNotice, setApplyNotice] = useState('')
+  // 原文预览模式：应用成功后预览直接展示用户粘贴的原文，解析结果映射回原文行做高亮
+  const [manualApplied, setManualApplied] = useState(false)
 
   // scatter 文本：非编辑模式时自动生成
   const generatedScatterText = useMemo(() => generateScatter(model), [model])
@@ -364,7 +429,7 @@ export default function MemoryLabModule() {
     setModel(sceneObj.modelFn())
     setManualScatterText('')
     setManualDirty(false)
-    setApplyNotice('')
+    setManualApplied(false)
     setScatterEditMode(false)
     setBootStep(-1)
   }
@@ -382,12 +447,17 @@ export default function MemoryLabModule() {
     ? generateIcf(model)
     : generatedScatterText
 
-  // 进入编辑模式：仅在没有未应用的手动文本时预填充（避免空白）；
+  // 进入编辑模式：原文预览模式下保留原文；否则仅在没有未应用的手动文本时预填充（避免空白）。
   // 已粘贴/编辑过的文本在 编辑⇄预览 切换中保持原样，不会被覆盖
   const enterScatterEdit = () => {
-    if (!manualDirty) setManualScatterText(currentGeneratedText)
-    setApplyNotice('')
+    if (!manualDirty && !manualApplied) setManualScatterText(currentGeneratedText)
     setScatterEditMode(true)
+  }
+
+  // 用户改动模型（拖拽 / 增删 region、section / FIXED 地址）→ 退出原文预览，回到生成视图
+  const changeModel = (newModel) => {
+    setModel(newModel)
+    setManualApplied(false)
   }
 
   // scatter 文本变更 → 尝试解析（按内容自动识别语法，页签没切对也能解析）
@@ -406,11 +476,11 @@ export default function MemoryLabModule() {
       loadRegions: result.loadRegions,
     }
     setModel(newModel)
-    setSyntaxTab(syntax) // 预览格式与粘贴内容保持一致
-    setManualScatterText('') // 下次进入编辑按新模型重新填充
+    setSyntaxTab(syntax) // 语法页签与粘贴内容保持一致
+    // 保留原文：预览进入原文模式，解析出的 region/section 映射回原文行高亮
     setManualDirty(false)
+    setManualApplied(true)
     setScatterEditMode(false)
-    setApplyNotice('已解析并应用到模型。预览文本由模型重新生成：原文中的注释、符号表达式等无法保留；各 section 大小默认 4KB，可在左侧树中调整。')
   }
 
   // 启动搬运自动播放（用 ref 避免 effect 内同步 setState）
@@ -451,7 +521,7 @@ export default function MemoryLabModule() {
 
   const handleDrop = (regionName) => {
     if (dragItemId) {
-      setModel(placeItem(model, dragItemId, regionName))
+      changeModel(placeItem(model, dragItemId, regionName))
     }
     setDragItemId(null)
     setDragOverRegion(null)
@@ -486,7 +556,7 @@ export default function MemoryLabModule() {
   const confirmAddSection = (regionName) => {
     if (newItemLabelInline) {
       const attrStr = newItemAttrsInline.length > 0 ? ` (${newItemAttrsInline.join(', ')})` : ''
-      setModel(addItem(model, { label: newItemLabelInline + attrStr, region: regionName, size: parseInt(newItemSizeInline, 16) || 0x1000 }))
+      changeModel(addItem(model, { label: newItemLabelInline + attrStr, region: regionName, size: parseInt(newItemSizeInline, 16) || 0x1000 }))
     }
     setAddingInSection(null)
   }
@@ -519,7 +589,7 @@ export default function MemoryLabModule() {
 
   const confirmAddRegion = () => {
     if (newRegionNameInline) {
-      setModel(addRegion(model, {
+      changeModel(addRegion(model, {
         name: newRegionNameInline,
         base: parseInt(newRegionBaseInline, 16),
         maxSize: parseInt(newRegionSizeInline, 16),
@@ -574,7 +644,7 @@ export default function MemoryLabModule() {
                 {region.attrs.unionWith && <span className="text-[10px] px-1 rounded border border-purple-400/40 bg-purple-400/10 text-purple-300">UNION {region.attrs.unionWith}</span>}
                 <button
                   type="button"
-                  onClick={(e) => { e.stopPropagation(); setModel(removeRegion(model, region.name)) }}
+                  onClick={(e) => { e.stopPropagation(); changeModel(removeRegion(model, region.name)) }}
                   className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger/80 transition-opacity"
                   title="删除 Region"
                 >
@@ -602,7 +672,7 @@ export default function MemoryLabModule() {
                       <span className="text-xs text-muted">{fmtKB(item.size)}</span>
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setModel(removeItem(model, item.id)) }}
+                        onClick={(e) => { e.stopPropagation(); changeModel(removeItem(model, item.id)) }}
                         className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger/80 transition-opacity"
                         title="删除 Section"
                       >
@@ -727,9 +797,18 @@ export default function MemoryLabModule() {
 
   const scatterCanvas = (
     <div className="space-y-4">
-      {applyNotice && (
-        <div className="rounded border border-accent-2/40 bg-accent-2/10 px-3 py-2 text-xs text-accent-2">
-          ⓘ {applyNotice}
+      {!scatterEditMode && manualApplied && manualScatterText && (
+        <div className="flex items-center gap-2 rounded border border-accent-2/40 bg-accent-2/10 px-3 py-2 text-xs text-accent-2">
+          <span className="flex-1">
+            ⓘ 正在显示原文（识别 {model.regions.length} 个 region / {model.items.length} 个 section，点击行可联动高亮；section 大小默认 4KB，可在左侧树调整）
+          </span>
+          <button
+            type="button"
+            onClick={() => setManualApplied(false)}
+            className="shrink-0 rounded border border-accent-2/40 px-2 py-0.5 transition-colors hover:bg-accent-2/20"
+          >
+            返回生成视图
+          </button>
         </div>
       )}
       {errors.length > 0 && (
@@ -768,9 +847,18 @@ export default function MemoryLabModule() {
             />
             <div className="mt-2 flex gap-2">
               <Button variant="primary" onClick={applyScatterText}>应用</Button>
-              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false) }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
+              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false); setManualApplied(false) }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
             </div>
           </div>
+        ) : manualApplied && manualScatterText ? (
+          <ManualTextView
+            text={manualScatterText}
+            model={model}
+            hlRegion={hlRegion}
+            hlItem={hlItem}
+            setHlRegion={setHlRegion}
+            setHlItem={setHlItem}
+          />
         ) : syntaxTab === 'sct' ? (
           <div className="rounded-lg border border-line bg-code p-3 font-mono text-xs space-y-3">
             {/* Load Region 级别 */}
@@ -938,7 +1026,7 @@ export default function MemoryLabModule() {
             setFixedAddr(e.target.value)
             const parsed = parseInt(e.target.value, 16)
             if (!isNaN(parsed)) {
-              setModel(updateRegion(model, 'ER_RODATA', { base: parsed, attrs: { ...model.regions.find(r => r.name === 'ER_RODATA')?.attrs, fixed: true } }))
+              changeModel(updateRegion(model, 'ER_RODATA', { base: parsed, attrs: { ...model.regions.find(r => r.name === 'ER_RODATA')?.attrs, fixed: true } }))
             }
           }} className="w-32" />
         </FieldRow>

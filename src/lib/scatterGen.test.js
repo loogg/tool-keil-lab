@@ -189,6 +189,46 @@ describe('detectLinkerSyntax（按内容自动识别语法）', () => {
   })
 })
 
+describe('解析结果的行号映射（原文预览用）', () => {
+  const lines = REAL_LD.split('\n')
+
+  it('parseLd：item 带 section 头..结束行区间，region 带 MEMORY 行号', () => {
+    const r = parseLd(REAL_LD)
+    const text = r.items.find((i) => i.label === '.text')
+    expect(lines[text.lineStart].trim().startsWith('.text')).toBe(true)
+    expect(lines[text.lineEnd].trim()).toMatch(/^\}\s*>\s*XPI0/)
+
+    const xpi0 = r.regions.find((x) => x.name === 'XPI0')
+    expect(lines[xpi0.line]).toMatch(/XPI0.*ORIGIN/)
+  })
+
+  it('多行注释被剥离后行号不错位', () => {
+    // REAL_LD 开头是 5 行块注释，若剥离时丢行，所有行号都会偏移
+    const r = parseLd(REAL_LD)
+    const bss = r.items.find((i) => i.label === '.bss')
+    expect(lines[bss.lineStart].trim().startsWith('.bss')).toBe(true)
+    const vectors = r.items.find((i) => i.label === '.vectors')
+    expect(lines[vectors.lineEnd].trim()).toMatch(/^\}\s*>\s*ILM/)
+  })
+
+  it('parseScatter / parseIcf：region 与 item 均带行号', () => {
+    const sctSrc = generateScatter(createDefaultModel())
+    const s = parseScatter(sctSrc)
+    const sctLines = sctSrc.split('\n')
+    expect(Number.isInteger(s.regions[0].line)).toBe(true)
+    expect(sctLines[s.regions[0].line]).toContain(s.regions[0].name)
+    expect(Number.isInteger(s.items[0].lineStart)).toBe(true)
+
+    const icfSrc = generateIcf(createDefaultModel())
+    const i = parseIcf(icfSrc)
+    const icfLines = icfSrc.split('\n')
+    expect(Number.isInteger(i.regions[0].line)).toBe(true)
+    expect(icfLines[i.regions[0].line]).toContain(i.regions[0].name)
+    expect(Number.isInteger(i.items[0].lineStart)).toBe(true)
+    expect(icfLines[i.items[0].lineStart]).toMatch(/place\s+in/)
+  })
+})
+
 describe('ld/icf item 行映射（生成器与交互视图共用）', () => {
   it('ldItemLines 按 label 类型展开', () => {
     expect(ldItemLines({ label: '*.o (RESET, +First)' })).toEqual(['KEEP(*(.isr_vector))'])
