@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createDefaultModel } from './memoryMap.js'
+import { createDefaultModel, addItem } from './memoryMap.js'
 import {
   generateScatter, generateLd, generateIcf,
   parseScatter, parseLd, parseIcf,
@@ -239,9 +239,50 @@ describe('ld/icf item 行映射（生成器与交互视图共用）', () => {
   })
 
   it('icfItemPlacements 按 label 类型展开', () => {
-    expect(icfItemPlacements({ label: '*.o (RESET, +First)' })).toEqual(['vector'])
+    // 官方 icf：向量用 readonly section .intvec（配合 place at start of），无独立 ZI placement
+    expect(icfItemPlacements({ label: '*.o (RESET, +First)' })).toEqual(['readonly section .intvec'])
     expect(icfItemPlacements({ label: '.ANY (+RO)' })).toEqual(['readonly'])
-    expect(icfItemPlacements({ label: '.ANY (+RW +ZI)' })).toEqual(['readwrite', 'block ZI'])
+    expect(icfItemPlacements({ label: '.ANY (+RW +ZI)' })).toEqual(['readwrite', 'readwrite'])
     expect(icfItemPlacements({ label: '.text' })).toEqual(['section .text*'])
+  })
+})
+
+describe('语义 kind：左侧添加一次，三种格式各自生成官方语法', () => {
+  const withItem = (template) => addItem(createDefaultModel(), template)
+
+  it('ro 无名 → .ANY (+RO) / *(.text*) *(.rodata*) / readonly', () => {
+    const m = withItem({ label: '', region: 'ER_IROM1', size: 0x100, kind: 'ro' })
+    expect(generateScatter(m)).toContain('.ANY (+RO)')
+    expect(generateLd(m)).toContain('*(.text*) *(.rodata*)')
+    expect(generateIcf(m)).toContain('readonly')
+  })
+
+  it('zi 具名 .noinit_x → * (.noinit_x) / *(.noinit_x*) / section .noinit_x', () => {
+    const m = withItem({ label: '.noinit_x', region: 'RW_IRAM1', size: 0x100, kind: 'zi' })
+    expect(generateScatter(m)).toContain('* (.noinit_x)')
+    expect(generateLd(m)).toContain('*(.noinit_x*)')
+    expect(generateIcf(m)).toContain('section .noinit_x')
+    // block ZI 不是官方 icf placement，不得出现
+    expect(generateIcf(m)).not.toContain('block ZI')
+  })
+
+  it('vector → (RESET, +First) / KEEP(*(.isr_vector)) / place at start of', () => {
+    const m = withItem({ label: '', region: 'ER_IROM1', size: 0x200, kind: 'vector' })
+    expect(generateScatter(m)).toContain('*.o (RESET, +First)')
+    expect(generateLd(m)).toContain('KEEP(*(.isr_vector))')
+    expect(generateIcf(m)).toContain('place at start of ER_IROM1 { readonly section .intvec };')
+  })
+
+  it('uninit region → ld 输出段带官方 (NOLOAD) 类型', () => {
+    expect(generateLd(createDefaultModel())).toMatch(/\.sdram_noinit \(NOLOAD\) : \{/)
+  })
+
+  it('round-trip：kind item 生成的 ld 合法且可被 parseLd 解析', () => {
+    const m = withItem({ label: '.noinit_x', region: 'RW_IRAM1', size: 0x100, kind: 'zi' })
+    const text = generateLd(m)
+    expect(text).toContain('*(.noinit_x*)')
+    const parsed = parseLd(text)
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.regions.some((r) => r.name === 'RW_IRAM1')).toBe(true)
   })
 })

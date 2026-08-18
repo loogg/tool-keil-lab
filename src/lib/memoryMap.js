@@ -12,9 +12,9 @@ const REGIONS = [
 ]
 
 const ITEMS = [
-  { id: 'reset', label: '*.o (RESET, +First)', detail: '向量表', region: 'ER_IROM1', size: 0x200, custom: false },
+  { id: 'reset', label: '*.o (RESET, +First)', detail: '向量表', region: 'ER_IROM1', size: 0x200, custom: false, kind: 'vector' },
   { id: 'inroot', label: '*(InRoot$$Sections)', detail: '__main 等根段', region: 'ER_IROM1', size: 0x300, custom: false },
-  { id: 'anyro', label: '.ANY (+RO)', detail: '其余代码与只读数据', region: 'ER_IROM1', size: 0x58000, custom: false },
+  { id: 'anyro', label: '.ANY (+RO)', detail: '其余代码与只读数据', region: 'ER_IROM1', size: 0x58000, custom: false, kind: 'ro' },
   { id: 'webfs', label: 'webserver_packedfs.o (.rodata.*)', detail: '网页资源 36KB', region: 'ER_RODATA', size: 0x9000, custom: false },
   { id: 'mongoose', label: 'mongoose.o (+RO)', detail: '网络库只读部分 132KB', region: 'RW_IRAM1', size: 0x21000, custom: false },
   { id: 'op0715', label: 'op0715_*.o (+RO)', detail: '业务资源 32KB', region: 'RW_IRAM1', size: 0x8000, custom: false },
@@ -54,8 +54,8 @@ export function createDualLoadModel() {
   })
   // 添加 BL 的 items
   model.items.unshift(
-    { id: 'bl_reset', label: '*.o (RESET, +First)', detail: 'BL 向量表', region: 'ER_BL_IROM', size: 0x200, custom: true },
-    { id: 'bl_code', label: '.ANY (+RO)', detail: 'BL 代码', region: 'ER_BL_IROM', size: 0x10000, custom: true },
+    { id: 'bl_reset', label: '*.o (RESET, +First)', detail: 'BL 向量表', region: 'ER_BL_IROM', size: 0x200, custom: true, kind: 'vector' },
+    { id: 'bl_code', label: '.ANY (+RO)', detail: 'BL 代码', region: 'ER_BL_IROM', size: 0x10000, custom: true, kind: 'ro' },
   )
   // 添加第二个加载区
   model.loadRegions = [
@@ -131,7 +131,8 @@ export function updateItem(model, itemId, patch) {
 
 let _nextCustomId = 100
 export function addItem(model, template) {
-  // template: { label, detail, region, size }
+  // template: { label, detail, region, size, kind? }
+  // kind: 'ro' | 'rw' | 'zi' | 'vector' | 'raw' —— 语义类型，三种链接脚本各自生成官方语法
   const id = `custom_${_nextCustomId++}`
   return {
     ...model,
@@ -141,6 +142,7 @@ export function addItem(model, template) {
       detail: template.detail || '',
       region: template.region,
       size: template.size,
+      kind: template.kind,
       custom: true,
     }],
   }

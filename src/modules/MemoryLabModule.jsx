@@ -44,50 +44,104 @@ const SCENES = [
   { id: 'union', label: 'UNION 演示', modelFn: createUnionModel },
 ]
 
-// Region 属性详细说明
+// Region 语义属性（依据官方文档，三种链接脚本各自的写法）
+// Keil: armlink User Guide「Execution region attributes」（FIXED/UNINIT 等）
+// GCC:  binutils ld 手册 MEMORY / Output Section Type（NOLOAD）
+// IAR:  docs.iar.com linker configuration file（define region / do not initialize）
 const REGION_ATTR_DETAILS = {
   fixed: {
-    title: 'FIXED - 固定绝对地址',
-    content: '将执行区固定在指定地址，链接器不会因前方区域大小变化而调整其位置。',
-    usage: ['Bootloader 向量表 (0x08000000)', 'Flash 配置参数区', '需要绝对地址访问的硬件寄存器映射'],
-    syntax: 'ER_NAME 0x08000000 FIXED 0x10000 { ... }',
+    title: '固定绝对地址',
+    content: '将该区域钉在指定绝对地址，不随其它区域大小变化而移动。典型用途：Bootloader 向量表、Flash 参数区、寄存器映射。',
+    formats: [
+      ['Keil .sct', 'ER_NAME 0x08000000 FIXED 0x10000 { ... }'],
+      ['GCC .ld', 'MEMORY 区本身就是绝对地址（无对应关键字，生成时以 /* FIXED */ 注释标注）'],
+      ['IAR .icf', 'define region 本身即显式地址；需要钉住某个段时用 place at address mem:0x... { ... }'],
+    ],
   },
   uninit: {
-    title: 'UNINIT - 不初始化',
-    content: '链接器不为该区域生成初始化代码，保留掉电前的内容。适用于需要保持状态的 RAM 区域。',
-    usage: ['RTC 备份寄存器', '快速启动时跳过清零', '掉电保持数据'],
-    syntax: 'RW_SDRAM_NOINIT 0xC0000000 UNINIT 0x2000000 { ... }',
-  },
-  block: {
-    title: 'BLOCK - 限制大小',
-    content: '限制该 region 的最大大小，防止链接器将其他内容放入。超出限制会产生链接错误。',
-    usage: ['严格控制代码大小', '防止意外溢出到其他区域', '模块化分区'],
-    syntax: 'ER_CODE 0x00020000 BLOCK(0x00040000) { ... }',
-  },
-  pi: {
-    title: 'PI - 位置无关代码',
-    content: '标记该加载区包含位置无关代码（PIC），可在任意地址运行。常用于 Bootloader 或 OTA 升级场景。',
-    usage: ['Bootloader 自身', 'OTA 升级固件', '可在 RAM 中运行的代码'],
-    syntax: 'LR_APP 0x08020000 0x000E0000 PI { ... }',
-  },
-  overlay: {
-    title: 'OVERLAY - 覆盖区',
-    content: '多个加载区共享同一段物理地址，通过软件切换加载不同内容。用于内存极度受限的场景。',
-    usage: ['多固件镜像切换', 'Bank 切换', '共享 RAM 的不同用途'],
-    syntax: 'LR_OVERLAY1 0x20000000 0x10000 OVERLAY { ... }',
+    title: '不初始化',
+    content: '启动代码不初始化该区域，保留掉电前的内容。典型用途：帧缓存、掉电保持数据、快速启动跳过清零。',
+    formats: [
+      ['Keil .sct', 'RW_XXX 0xC0000000 UNINIT 0x2000000 { ... }'],
+      ['GCC .ld', '输出段标记 (NOLOAD)：.xxx (NOLOAD) : { ... }'],
+      ['IAR .icf', 'do not initialize { section .xxx };'],
+    ],
   },
 }
 
-// Section 属性详细说明
-const SECTION_ATTR_DETAILS = {
-  '+RO': { title: '+RO - 只读属性', content: '包含代码和只读数据（.text, .rodata）。放置在 Flash 中。' },
-  '+RW': { title: '+RW - 读写属性', content: '包含有初值的全局/静态变量（.data）。启动时从 Flash 复制到 RAM。' },
-  '+ZI': { title: '+ZI - 零初始化', content: '包含未初始化或零初始化的变量（.bss）。启动时清零，不占 Flash 空间。' },
-  'RESET': { title: 'RESET - 复位向量', content: '包含中断向量表。必须放在 Flash 起始地址 (0x08000000)。' },
-  '+First': { title: '+First - 最前放置', content: '强制该 section 放在 region 的最开头。常用于向量表或启动代码。' },
+// Section 语义类型：左侧添加一次，sct / ld / icf 各自生成官方语法
+const SECTION_KINDS = [
+  { id: 'ro', label: '只读', desc: '代码 + 只读数据' },
+  { id: 'rw', label: '读写', desc: '有初值数据，启动时复制到 RAM' },
+  { id: 'zi', label: '零初始化', desc: '启动时清零，不占 Flash' },
+  { id: 'vector', label: '向量表', desc: '放在区域开头（RESET）' },
+  { id: 'raw', label: '自定义', desc: '选择器原样写入' },
+]
+
+const SECTION_KIND_DETAILS = {
+  ro: {
+    title: '只读（代码 + RO 数据）',
+    content: '对应 .text / .rodata：指令与常量，放在 Flash。',
+    formats: [
+      ['Keil .sct', '通配 .ANY (+RO)；具名 * (.name)'],
+      ['GCC .ld', '通配 *(.text*) *(.rodata*)；具名 *(.name*)'],
+      ['IAR .icf', '通配 readonly；具名 section .name'],
+    ],
+  },
+  rw: {
+    title: '读写数据（有初值）',
+    content: '对应 .data：有初值的全局/静态变量，存 Flash、启动时复制到 RAM。',
+    formats: [
+      ['Keil .sct', '通配 .ANY (+RW)；具名 * (.name)'],
+      ['GCC .ld', '通配 *(.data*)；具名 *(.name*)'],
+      ['IAR .icf', 'readwrite（配合 initialize by copy 在启动时复制）'],
+    ],
+  },
+  zi: {
+    title: '零初始化数据',
+    content: '对应 .bss：零初值变量，只占 RAM、不占 Flash，启动时清零。',
+    formats: [
+      ['Keil .sct', '通配 .ANY (+ZI)；具名 * (.name)'],
+      ['GCC .ld', '通配 *(.bss*) *(COMMON)；具名 *(.name*)'],
+      ['IAR .icf', 'readwrite（官方：零初始化段不受 initialize 指令影响，启动自动清零）'],
+    ],
+  },
+  vector: {
+    title: '向量表（区域开头）',
+    content: '中断向量表，必须放在区域最开头（RESET 入口在此）。',
+    formats: [
+      ['Keil .sct', '*.o (RESET, +First)'],
+      ['GCC .ld', 'KEEP(*(.isr_vector))'],
+      ['IAR .icf', 'place at start of <region> { readonly section .intvec }'],
+    ],
+  },
+  raw: {
+    title: '自定义选择器',
+    content: '输入内容原样写入文件，用于模块选择器等高级写法（如 mongoose.o (+RO)）。',
+    formats: [
+      ['Keil .sct', '原样写入'],
+      ['GCC .ld', '原样写入（或以 *(name*) 包裹）'],
+      ['IAR .icf', '原样写入（或以 section name 包裹）'],
+    ],
+  },
 }
 
-// 属性按钮组件（带详细说明弹层）
+// 三种链接脚本写法对照表（弹层内展示，依据官方文档）
+function FormatTable({ formats }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[10px] font-semibold text-accent">三种链接脚本的官方写法:</p>
+      {formats.map(([fmt, syn]) => (
+        <div key={fmt}>
+          <p className="text-[10px] text-muted">{fmt}</p>
+          <pre className="text-[11px] text-ink bg-code rounded p-2 overflow-x-auto whitespace-pre-wrap">{syn}</pre>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Region 语义属性按钮（带三格式写法弹层）
 function RegionAttrButton({ attr, selected, onClick }) {
   const [showDetail, setShowDetail] = useState(false)
   const detail = REGION_ATTR_DETAILS[attr.id]
@@ -102,11 +156,7 @@ function RegionAttrButton({ attr, selected, onClick }) {
           selected
             ? attr.id === 'fixed'
               ? 'border-warn bg-warn/20 text-warn'
-              : attr.id === 'uninit'
-              ? 'border-accent-2 bg-accent-2/20 text-accent-2'
-              : attr.id === 'block'
-              ? 'border-amber-400 bg-amber-400/20 text-amber-400'
-              : 'border-emerald-400 bg-emerald-400/20 text-emerald-400'
+              : 'border-accent-2 bg-accent-2/20 text-accent-2'
             : 'border-line bg-panel hover:border-accent hover:text-accent'
         }`}
         title={attr.desc}
@@ -119,14 +169,7 @@ function RegionAttrButton({ attr, selected, onClick }) {
           <div className="rounded-lg border border-line bg-panel p-4 max-w-md" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-ink mb-2">{detail.title}</h3>
             <p className="text-xs text-muted mb-3">{detail.content}</p>
-            <div className="space-y-1.5">
-              <p className="text-[10px] font-semibold text-accent">典型用途:</p>
-              <ul className="text-xs text-muted list-disc list-inside space-y-0.5">
-                {detail.usage.map((u, i) => <li key={i}>{u}</li>)}
-              </ul>
-              <p className="text-[10px] font-semibold text-accent mt-2">语法示例:</p>
-              <pre className="text-[11px] text-ink bg-code rounded p-2 overflow-x-auto">{detail.syntax}</pre>
-            </div>
+            <FormatTable formats={detail.formats} />
             <button className="mt-3 w-full rounded bg-accent/20 text-accent text-xs py-1.5" onClick={() => setShowDetail(false)}>关闭</button>
           </div>
         </div>
@@ -135,10 +178,10 @@ function RegionAttrButton({ attr, selected, onClick }) {
   )
 }
 
-// Section 属性按钮组件（带详细说明弹层）
-function SectionAttrButton({ attr, selected, onClick }) {
+// Section 语义类型按钮（单选；带三格式写法弹层）
+function SectionKindButton({ kind, selected, onClick }) {
   const [showDetail, setShowDetail] = useState(false)
-  const detail = SECTION_ATTR_DETAILS[attr.id]
+  const detail = SECTION_KIND_DETAILS[kind.id]
 
   return (
     <>
@@ -151,16 +194,17 @@ function SectionAttrButton({ attr, selected, onClick }) {
             ? 'border-accent bg-accent/20 text-accent'
             : 'border-line bg-panel hover:border-accent hover:text-accent'
         }`}
-        title={attr.desc}
+        title={kind.desc}
       >
-        {selected ? '✓ ' : ''}{attr.label}
+        {selected ? '✓ ' : ''}{kind.label}
         <span className="ml-0.5 opacity-50">ⓘ</span>
       </button>
       {showDetail && detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowDetail(false)}>
-          <div className="rounded-lg border border-line bg-panel p-4 max-w-sm" onClick={(e) => e.stopPropagation()}>
+          <div className="rounded-lg border border-line bg-panel p-4 max-w-md" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-ink mb-2">{detail.title}</h3>
-            <p className="text-xs text-muted">{detail.content}</p>
+            <p className="text-xs text-muted mb-3">{detail.content}</p>
+            <FormatTable formats={detail.formats} />
             <button className="mt-3 w-full rounded bg-accent/20 text-accent text-xs py-1.5" onClick={() => setShowDetail(false)}>关闭</button>
           </div>
         </div>
@@ -193,7 +237,7 @@ function LdInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setH
       <div className="text-ink/60">{'{'}</div>
       {regions.map((region) => (
         <div key={region.name} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
-          {`  ${region.name} (${region.kind === 'flash' ? 'rx' : 'rwx'}) : ORIGIN = ${hex(region.base)}, LENGTH = 0x${region.maxSize.toString(16).toUpperCase()}`}
+          {`  ${region.name} (${region.kind === 'flash' ? 'rx' : 'rwx'}) : ORIGIN = ${hex(region.base)}, LENGTH = 0x${region.maxSize.toString(16).toUpperCase()}${region.attrs.fixed ? '  /* FIXED */' : ''}`}
         </div>
       ))}
       <div className="text-ink/60">{'}'}</div>
@@ -207,7 +251,7 @@ function LdInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setH
           return (
             <div key={region.name} className="mt-1">
               <div className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
-                {`  .${sectionName} : {`}
+                {`  .${sectionName}${region.attrs.uninit ? ' (NOLOAD)' : ''} : {`}
               </div>
               {items.map((item) =>
                 ldItemLines(item).map((line, li) => (
@@ -265,44 +309,78 @@ function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, set
       <div className="mt-3">
         {regions.map((region) => {
           const items = model.items.filter((i) => i.region === region.name)
-          if (items.length === 0) {
-            return (
-              <div key={region.name} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
-                {`place in ${region.name} { ${region.kind === 'flash' ? 'readonly' : 'readwrite'} };`}
+          const vectorItems = items.filter((i) => i.kind === 'vector')
+          const restItems = items.filter((i) => i.kind !== 'vector')
+          const rows = []
+
+          // 向量表：官方写法 place at start of 钉在区域开头（与 generateIcf 一致）
+          for (const item of vectorItems) {
+            const label = (item.label || '').trim()
+            const sectionName = label && !label.includes('RESET') ? label : '.intvec'
+            rows.push(
+              <div
+                key={`${region.name}-vector-${item.id}`}
+                className={`rounded px-2 py-0.5 transition-colors ${hlRegion === region.name ? 'bg-accent/20' : 'hover:bg-panel-2'}`}
+              >
+                <span
+                  className={`cursor-pointer ${hlRegion === region.name ? 'text-accent' : 'text-ink'}`}
+                  onClick={() => clickRegion(region.name)}
+                >
+                  {`place at start of ${region.name} { readonly section `}
+                </span>
+                <span
+                  className={`cursor-pointer rounded ${
+                    hlItem === item.id ? 'bg-accent/20 text-accent' : 'text-ink/80 hover:text-accent'
+                  }`}
+                  onClick={() => clickItem(item.id, region.name)}
+                >
+                  {sectionName}
+                </span>
+                <span className={hlRegion === region.name ? 'text-accent' : 'text-ink'}>{' };'}</span>
               </div>
             )
           }
-          return (
-            <div
-              key={region.name}
-              className={`rounded px-2 py-0.5 transition-colors ${hlRegion === region.name ? 'bg-accent/20' : 'hover:bg-panel-2'}`}
-            >
-              <span
-                className={`cursor-pointer ${hlRegion === region.name ? 'text-accent' : 'text-ink'}`}
-                onClick={() => clickRegion(region.name)}
+
+          if (restItems.length === 0 && vectorItems.length === 0) {
+            rows.push(
+              <div key={`${region.name}-default`} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+                {`place in ${region.name} { ${region.kind === 'flash' ? 'readonly' : 'readwrite'} };`}
+              </div>
+            )
+          } else if (restItems.length > 0) {
+            rows.push(
+              <div
+                key={`${region.name}-place`}
+                className={`rounded px-2 py-0.5 transition-colors ${hlRegion === region.name ? 'bg-accent/20' : 'hover:bg-panel-2'}`}
               >
-                {`place in ${region.name} { `}
-              </span>
-              {items.map((item, idx) => (
-                <span key={item.id}>
-                  <span
-                    className={`cursor-pointer rounded ${
-                      hlItem === item.id
-                        ? 'bg-accent/20 text-accent'
-                        : hlRegion === region.name
-                        ? 'text-accent/80 hover:text-accent'
-                        : 'text-ink/80 hover:text-accent'
-                    }`}
-                    onClick={() => clickItem(item.id, region.name)}
-                  >
-                    {icfItemPlacements(item).join(', ')}
-                  </span>
-                  {idx < items.length - 1 && <span className="text-ink/60">, </span>}
+                <span
+                  className={`cursor-pointer ${hlRegion === region.name ? 'text-accent' : 'text-ink'}`}
+                  onClick={() => clickRegion(region.name)}
+                >
+                  {`place in ${region.name} { `}
                 </span>
-              ))}
-              <span className={hlRegion === region.name ? 'text-accent' : 'text-ink'}>{' };'}</span>
-            </div>
-          )
+                {restItems.map((item, idx) => (
+                  <span key={item.id}>
+                    <span
+                      className={`cursor-pointer rounded ${
+                        hlItem === item.id
+                          ? 'bg-accent/20 text-accent'
+                          : hlRegion === region.name
+                          ? 'text-accent/80 hover:text-accent'
+                          : 'text-ink/80 hover:text-accent'
+                      }`}
+                      onClick={() => clickItem(item.id, region.name)}
+                    >
+                      {icfItemPlacements(item).join(', ')}
+                    </span>
+                    {idx < restItems.length - 1 && <span className="text-ink/60">, </span>}
+                  </span>
+                ))}
+                <span className={hlRegion === region.name ? 'text-accent' : 'text-ink'}>{' };'}</span>
+              </div>
+            )
+          }
+          return <div key={region.name}>{rows}</div>
         })}
       </div>
       {uninitRegions.length > 0 && (
@@ -530,34 +608,24 @@ export default function MemoryLabModule() {
   const [addingInSection, setAddingInSection] = useState(null)
   const [newItemLabelInline, setNewItemLabelInline] = useState('')
   const [newItemSizeInline, setNewItemSizeInline] = useState('0x1000')
-  const [newItemAttrsInline, setNewItemAttrsInline] = useState([])
-
-  const SECTION_ATTRS = [
-    { id: '+RO', label: '+RO', desc: '只读' },
-    { id: '+RW', label: '+RW', desc: '读写' },
-    { id: '+ZI', label: '+ZI', desc: '零初始化' },
-    { id: 'RESET', label: 'RESET', desc: '复位向量' },
-    { id: '+First', label: '+First', desc: '放在最前' },
-  ]
+  // 语义类型（ro/rw/zi/vector/raw）：左侧添加一次，sct/ld/icf 各自生成官方语法
+  const [newItemKindInline, setNewItemKindInline] = useState('ro')
 
   const startAddSection = (regionName) => {
     setAddingInSection(regionName)
     setNewItemLabelInline('')
     setNewItemSizeInline('0x1000')
-    setNewItemAttrsInline([])
-  }
-
-  const toggleSectionAttr = (attr) => {
-    setNewItemAttrsInline((prev) =>
-      prev.includes(attr) ? prev.filter((a) => a !== attr) : [...prev, attr]
-    )
+    setNewItemKindInline('ro')
   }
 
   const confirmAddSection = (regionName) => {
-    if (newItemLabelInline) {
-      const attrStr = newItemAttrsInline.length > 0 ? ` (${newItemAttrsInline.join(', ')})` : ''
-      changeModel(addItem(model, { label: newItemLabelInline + attrStr, region: regionName, size: parseInt(newItemSizeInline, 16) || 0x1000 }))
-    }
+    if (newItemKindInline === 'raw' && !newItemLabelInline.trim()) return
+    changeModel(addItem(model, {
+      label: newItemLabelInline.trim(),
+      region: regionName,
+      size: parseInt(newItemSizeInline, 16) || 0x1000,
+      kind: newItemKindInline,
+    }))
     setAddingInSection(null)
   }
 
@@ -567,12 +635,12 @@ export default function MemoryLabModule() {
   const [newRegionSizeInline, setNewRegionSizeInline] = useState('0x10000')
   const [newRegionAttrsInline, setNewRegionAttrsInline] = useState({ fixed: false, uninit: false })
 
+  // 官方 region 属性中只有 FIXED / UNINIT 在三种链接脚本里都有对应语义：
+  // FIXED → sct FIXED（ld/icf 的内存区本就是绝对地址）；UNINIT → sct UNINIT / ld (NOLOAD) / icf do not initialize。
+  // PI/OVERLAY 是 scatter 加载区属性、BLOCK 不是官方 region 属性，故不提供。
   const REGION_ATTRS = [
-    { id: 'fixed', label: 'FIXED', desc: '固定绝对地址，不随链接器调整' },
-    { id: 'uninit', label: 'UNINIT', desc: '不初始化（保留掉电前内容）' },
-    { id: 'block', label: 'BLOCK', desc: '限制 region 最大大小' },
-    { id: 'pi', label: 'PI', desc: '位置无关代码（Load Region 用）' },
-    { id: 'overlay', label: 'OVERLAY', desc: '多加载区共享地址空间' },
+    { id: 'fixed', label: 'FIXED', desc: '固定绝对地址（sct FIXED；ld/icf 区域本就是绝对地址）' },
+    { id: 'uninit', label: 'UNINIT', desc: '不初始化（sct UNINIT / ld (NOLOAD) / icf do not initialize）' },
   ]
 
   const startAddRegion = () => {
@@ -595,6 +663,8 @@ export default function MemoryLabModule() {
         maxSize: parseInt(newRegionSizeInline, 16),
         attrs: newRegionAttrsInline,
       }))
+      // 新 region 自动展开，方便继续添加 section
+      setExpandedRegions(new Set([...expandedRegions, newRegionNameInline]))
     }
     setAddingRegion(false)
   }
@@ -689,7 +759,7 @@ export default function MemoryLabModule() {
                         <TextInput
                           value={newItemLabelInline}
                           onChange={(e) => setNewItemLabelInline(e.target.value)}
-                          placeholder="section 标签（如 .text, .data）"
+                          placeholder="名称（如 .ccram）；留空用该类型通配"
                           className="flex-1 min-w-[80px] text-xs"
                           autoFocus
                         />
@@ -702,7 +772,7 @@ export default function MemoryLabModule() {
                         <button
                           type="button"
                           onClick={() => confirmAddSection(region.name)}
-                          disabled={!newItemLabelInline}
+                          disabled={newItemKindInline === 'raw' && !newItemLabelInline.trim()}
                           className="flex items-center justify-center w-7 h-7 shrink-0 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                           title="确认添加"
                         >
@@ -717,15 +787,15 @@ export default function MemoryLabModule() {
                           ×
                         </button>
                       </div>
-                      {/* 第二行：属性选择（带详细说明弹层） */}
+                      {/* 第二行：语义类型（三种链接脚本各自生成官方写法，双击看对照） */}
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-muted">属性:</span>
-                        {SECTION_ATTRS.map((attr) => (
-                          <SectionAttrButton
-                            key={attr.id}
-                            attr={attr}
-                            selected={newItemAttrsInline.includes(attr.id)}
-                            onClick={() => toggleSectionAttr(attr.id)}
+                        <span className="text-[10px] text-muted">类型:</span>
+                        {SECTION_KINDS.map((kind) => (
+                          <SectionKindButton
+                            key={kind.id}
+                            kind={kind}
+                            selected={newItemKindInline === kind.id}
+                            onClick={() => setNewItemKindInline(kind.id)}
                           />
                         ))}
                       </div>

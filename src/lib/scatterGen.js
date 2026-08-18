@@ -26,9 +26,42 @@ function customItemLines(item) {
   return [`    ${item.label}`]
 }
 
+// item → scatter 输入行（带原缩进风格）
+// 语义 kind 优先（跨工具链模型），其次才是旧 item 的 label 映射 / label 推断
+function scatterItemLines(item) {
+  if (item.kind === 'vector') return ['   *.o (RESET, +First)']
+  if (item.kind === 'ro' || item.kind === 'rw' || item.kind === 'zi') {
+    const n = (item.label || '').trim()
+    if (!n) return [`   .ANY (+${item.kind.toUpperCase()})`]
+    if (n.includes('.ANY')) return [`   ${n}`]
+    return [`    * (${n})`]
+  }
+  if (item.kind === 'raw') {
+    const n = (item.label || '').trim()
+    return n ? [`    ${n}`] : []
+  }
+  return ITEM_LINES[item.id] ?? customItemLines(item)
+}
+
 // item → ld 输入段行（不带缩进）；一个 item 可能展开成多行（如 .ANY (+RW +ZI)）
 // 生成器与交互式视图共用，保证「看到的行」与「生成的文本」一致
+// 语义 kind 优先：ro/rw/zi/vector/raw 输出各自的官方 ld 语法；旧数据走 label 推断
 export function ldItemLines(item) {
+  if (item.kind === 'vector') return ['KEEP(*(.isr_vector))']
+  if (item.kind === 'ro' || item.kind === 'rw' || item.kind === 'zi') {
+    const n = (item.label || '').trim()
+    if (!n || n.includes('.ANY')) {
+      if (item.kind === 'ro') return ['*(.text*) *(.rodata*)']
+      if (item.kind === 'rw') return ['*(.data*)']
+      return ['*(.bss*) *(COMMON)']
+    }
+    return [`*(${n}*)`]
+  }
+  if (item.kind === 'raw') {
+    const n = (item.label || '').trim()
+    if (!n) return []
+    return n.startsWith('*') || n.startsWith('.') ? [n] : [`*(${n}*)`]
+  }
   if (item.label.includes('RESET')) return ['KEEP(*(.isr_vector))']
   if (item.label.includes('.ANY')) {
     const parts = []
@@ -49,13 +82,28 @@ export function ldItemLines(item) {
 }
 
 // item → icf placement 列表；一个 item 可能对应多个 placement（如 .ANY (+RW +ZI)）
+// 语义 kind 优先：官方 icf 中 readonly 匹配代码与只读数据，readwrite 匹配初始化与
+// 零初始化数据（零初始化段不受 initialize 指令影响，启动时自动清零）
 export function icfItemPlacements(item) {
-  if (item.label.includes('RESET')) return ['vector']
+  if (item.kind === 'vector') return ['readonly section .intvec']
+  if (item.kind === 'ro' || item.kind === 'rw' || item.kind === 'zi') {
+    const n = (item.label || '').trim()
+    if (!n || n.includes('.ANY')) return [item.kind === 'ro' ? 'readonly' : 'readwrite']
+    return [`section ${n}`]
+  }
+  if (item.kind === 'raw') {
+    const n = (item.label || '').trim()
+    if (!n) return []
+    if (n.startsWith('section ')) return [n]
+    return [`section ${n.replace(/^\*/, '').trim()}`]
+  }
+  if (item.label.includes('RESET')) return ['readonly section .intvec']
   if (item.label.includes('.ANY')) {
     const parts = []
     if (item.label.includes('+RO')) parts.push('readonly')
     if (item.label.includes('+RW')) parts.push('readwrite')
-    if (item.label.includes('+ZI')) parts.push('block ZI')
+    // 官方 icf 没有独立的 ZI placement：readwrite 同时匹配零初始化段
+    if (item.label.includes('+ZI')) parts.push('readwrite')
     return parts
   }
   if (item.label.includes('.o')) {
@@ -81,7 +129,9 @@ export function generateLd(model) {
     // 权限位：flash = rx, ram = rwx
     const perm = region.kind === 'flash' ? 'rx' : 'rwx'
     const lenHex = `0x${region.maxSize.toString(16).toUpperCase()}`
-    lines.push(`  ${region.name} (${perm}) : ORIGIN = ${HEX(region.base)}, LENGTH = ${lenHex}`)
+    // FIXED 是 scatter 概念：ld 的 MEMORY 区本就是绝对地址，以注释标注
+    const fixedNote = region.attrs.fixed ? '  /* FIXED */' : ''
+    lines.push(`  ${region.name} (${perm}) : ORIGIN = ${HEX(region.base)}, LENGTH = ${lenHex}${fixedNote}`)
   }
   lines.push('}')
   lines.push('')
@@ -102,9 +152,10 @@ export function generateLd(model) {
       const items = model.items.filter((i) => i.region === region.name)
       if (items.length === 0) continue
 
-      // 简化映射：section 名 → ld 段名
+      // 简化映射：section 名 → ld 段名；UNINIT 区域用官方 (NOLOAD) 段类型
       const sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
-      lines.push(`  ${sectionName} : {`)
+      const noLoad = region.attrs.uninit ? ' (NOLOAD)' : ''
+      lines.push(`  ${sectionName}${noLoad} : {`)
       for (const item of items) {
         for (const line of ldItemLines(item)) lines.push(`    ${line}`)
       }
@@ -137,22 +188,32 @@ export function generateIcf(model) {
   }
   lines.push('')
 
-  // place in
+  // place at start of / place in
   for (const region of regions) {
     const items = model.items.filter((i) => i.region === region.name)
-    if (items.length === 0) {
+    const vectorItems = items.filter((i) => i.kind === 'vector')
+    const restItems = items.filter((i) => i.kind !== 'vector')
+
+    // 向量表：官方写法是 place at start of 钉在区域开头
+    for (const v of vectorItems) {
+      const label = (v.label || '').trim()
+      const sectionName = label && !label.includes('RESET') ? label : '.intvec'
+      lines.push(`place at start of ${region.name} { readonly section ${sectionName} };`)
+    }
+
+    if (restItems.length === 0 && vectorItems.length === 0) {
       // 空 region 默认放置
       if (region.kind === 'flash') {
         lines.push(`place in ${region.name} { readonly };`)
       } else {
         lines.push(`place in ${region.name} { readwrite };`)
       }
-    } else {
+    } else if (restItems.length > 0) {
       const placements = []
-      for (const item of items) {
+      for (const item of restItems) {
         placements.push(...icfItemPlacements(item))
       }
-      lines.push(`place in ${region.name} { ${placements.join(', ')} };`)
+      lines.push(`place in ${region.name} { ${[...new Set(placements)].join(', ')} };`)
     }
   }
 
@@ -172,7 +233,7 @@ export function generateIcf(model) {
 export function generateScatter(model) {
   const linesIn = (regionName) => model.items
     .filter((i) => i.region === regionName)
-    .flatMap((i) => ITEM_LINES[i.id] ?? customItemLines(i))
+    .flatMap((i) => scatterItemLines(i))
 
   const lines = []
   const lrGroups = {} // lrName → [regions]
