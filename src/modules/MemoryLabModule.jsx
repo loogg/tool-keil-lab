@@ -485,6 +485,8 @@ export default function MemoryLabModule() {
   // 切到其它页签则展示按模型生成的对应格式——三种格式互切同步
   const [origText, setOrigText] = useState('')
   const [origSyntax, setOrigSyntax] = useState('')
+  // 原文页签上的视图态：'orig' 显示原文 / 'gen' 显示生成文本（可随时切回原文）
+  const [origView, setOrigView] = useState('orig')
 
   // scatter 文本：非编辑模式时自动生成
   const generatedScatterText = useMemo(() => generateScatter(model), [model])
@@ -532,6 +534,7 @@ export default function MemoryLabModule() {
     setManualDirty(false)
     setOrigText('')
     setOrigSyntax('')
+    setOrigView('orig')
     setScatterEditMode(false)
     setBootStep(-1)
   }
@@ -549,10 +552,10 @@ export default function MemoryLabModule() {
     ? generateIcf(model)
     : generatedScatterText
 
-  // 进入编辑模式：有未应用的手动文本 → 保留；当前页签就是原文语法 → 用原文；
+  // 进入编辑模式：有未应用的手动文本 → 保留；当前正显示原文 → 用原文；
   // 否则按当前页签的生成文本预填充（避免空白）
   const enterScatterEdit = () => {
-    if (!manualDirty && !(origText && syntaxTab === origSyntax)) {
+    if (!manualDirty && !(origText && syntaxTab === origSyntax && origView === 'orig')) {
       setManualScatterText(currentGeneratedText)
     }
     setScatterEditMode(true)
@@ -563,6 +566,7 @@ export default function MemoryLabModule() {
     setModel(newModel)
     setOrigText('')
     setOrigSyntax('')
+    setOrigView('orig')
   }
 
   // scatter 文本变更 → 尝试解析（按内容自动识别语法，页签没切对也能解析）
@@ -587,6 +591,7 @@ export default function MemoryLabModule() {
     setManualDirty(false)
     setOrigText(manualScatterText)
     setOrigSyntax(syntax)
+    setOrigView('orig')
     setScatterEditMode(false)
   }
 
@@ -941,28 +946,29 @@ export default function MemoryLabModule() {
 
   const scatterCanvas = (
     <div className="space-y-4">
-      {!scatterEditMode && origText && syntaxTab === origSyntax && (
+      {!scatterEditMode && origText && syntaxTab === origSyntax && origView === 'orig' && (
         <div className="flex items-center gap-2 rounded border border-accent-2/40 bg-accent-2/10 px-3 py-2 text-xs text-accent-2">
           <span className="flex-1">
             ⓘ 正在显示原文（识别 {model.regions.length} 个 region / {model.items.length} 个 section，点击行可联动高亮；section 大小默认 4KB，可在左侧树调整）
           </span>
           <button
             type="button"
-            onClick={() => { setOrigText(''); setOrigSyntax('') }}
+            onClick={() => setOrigView('gen')}
             className="shrink-0 rounded border border-accent-2/40 px-2 py-0.5 transition-colors hover:bg-accent-2/20"
+            title="切换到按模型生成的文本；原文仍保留，可随时切回"
           >
             返回生成视图
           </button>
         </div>
       )}
-      {!scatterEditMode && origText && syntaxTab !== origSyntax && (
+      {!scatterEditMode && origText && (syntaxTab !== origSyntax || origView === 'gen') && (
         <div className="flex items-center gap-2 rounded border border-line bg-panel-2 px-3 py-2 text-xs text-muted">
           <span className="flex-1">
-            ⓘ 当前显示按模型生成的 {SYNTAX_LABEL[syntaxTab]} 文本；粘贴的原文（{SYNTAX_LABEL[origSyntax]}）仍保留，切回该页签可查看
+            ⓘ 当前显示按模型生成的 {SYNTAX_LABEL[syntaxTab]} 文本；粘贴的原文（{SYNTAX_LABEL[origSyntax]}）仍保留
           </span>
           <button
             type="button"
-            onClick={() => setSyntaxTab(origSyntax)}
+            onClick={() => { setSyntaxTab(origSyntax); setOrigView('orig') }}
             className="shrink-0 rounded border border-line px-2 py-0.5 transition-colors hover:border-accent hover:text-accent"
           >
             查看原文
@@ -974,6 +980,69 @@ export default function MemoryLabModule() {
           {errors.map((e, i) => <div key={i}>⚠ {e}</div>)}
         </div>
       )}
+
+      {/* Region 占用总览：置顶 + 双列紧凑栅格，先看布局概况再看文件（联动高亮） */}
+      <div>
+        <SectionLabel className="mb-2">Region 占用</SectionLabel>
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {regions.map((region) => {
+            const layout = regionLayout(model, region.name)
+            const overflow = overflowDetail(model, region.name)
+            const isHl = hlRegion === region.name
+            const pct = layout.limit > 0 ? Math.min(999, Math.round((layout.used / layout.limit) * 100)) : 0
+            return (
+              <div
+                key={region.name}
+                className={`rounded border bg-panel p-2 cursor-pointer transition-all ${isHl ? 'border-accent ring-1 ring-accent/30' : 'border-line'}`}
+                onClick={() => selectRegion(region.name)}
+              >
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-xs font-semibold text-ink">{region.name}</span>
+                  <span className={`shrink-0 text-[11px] ${layout.overflow ? 'text-danger' : 'text-muted'}`}>
+                    {fmtSize(layout.used)} / {fmtSize(layout.limit)} · {pct}%
+                  </span>
+                </div>
+                {/* 偏移可视化条 */}
+                <div className="relative h-5 overflow-hidden rounded bg-panel-2">
+                  {layout.items.map((item, i) => {
+                    const itemHl = hlItem === item.id
+                    return (
+                      <div
+                        key={item.id}
+                        className={`absolute top-0 h-full border-r border-bg/50 transition-all ${itemHl ? 'z-10 ring-2 ring-accent' : ''}`}
+                        style={{
+                          left: `${(item.offset / layout.limit) * 100}%`,
+                          width: `${(item.size / layout.limit) * 100}%`,
+                          background: itemHl ? '#818cf8' : (i % 2 === 0 ? '#3b82f6' : '#6366f1'),
+                          opacity: hlItem && !itemHl ? 0.3 : 1,
+                        }}
+                        title={`${item.label} @ ${hex(item.offset)} (${fmtSize(item.size)})`}
+                        onClick={(e) => { e.stopPropagation(); setHlItem(itemHl ? null : item.id); setHlRegion(region.name) }}
+                      />
+                    )
+                  })}
+                  {layout.gaps.map((gap, i) => (
+                    <div
+                      key={`gap-${i}`}
+                      className="absolute top-0 h-full pad-stripes opacity-30"
+                      style={{
+                        left: `${(gap.start / layout.limit) * 100}%`,
+                        width: `${(gap.size / layout.limit) * 100}%`,
+                      }}
+                      title={`碎片 @ ${hex(gap.start)} (${fmtSize(gap.size)})`}
+                    />
+                  ))}
+                </div>
+                {overflow && (
+                  <div className="mt-1 text-[11px] text-danger">
+                    ⚠ 溢出 {fmtSize(overflow.overflowBy)}（从 {overflow.itemLabel} 开始）
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
 
       {/* Scatter 交互式查看器（联动高亮 + 语法切换） */}
       <div>
@@ -1005,10 +1074,10 @@ export default function MemoryLabModule() {
             />
             <div className="mt-2 flex gap-2">
               <Button variant="primary" onClick={applyScatterText}>应用</Button>
-              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false); setOrigText(''); setOrigSyntax('') }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
+              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false); setOrigText(''); setOrigSyntax(''); setOrigView('orig') }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
             </div>
           </div>
-        ) : origText && syntaxTab === origSyntax ? (
+        ) : origText && syntaxTab === origSyntax && origView === 'orig' ? (
           <ManualTextView
             text={origText}
             model={model}
@@ -1101,67 +1170,6 @@ export default function MemoryLabModule() {
         )}
       </div>
 
-      {/* Region 占用详情（联动高亮） */}
-      <div>
-        <SectionLabel className="mb-2">Region 占用详情</SectionLabel>
-        <div className="space-y-2">
-          {regions.map((region) => {
-            const layout = regionLayout(model, region.name)
-            const overflow = overflowDetail(model, region.name)
-            const isHl = hlRegion === region.name
-            return (
-              <div
-                key={region.name}
-                className={`rounded border bg-panel p-3 cursor-pointer transition-all ${isHl ? 'border-accent ring-1 ring-accent/30' : 'border-line'}`}
-                onClick={() => selectRegion(region.name)}
-              >
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-mono text-sm font-semibold text-ink">{region.name}</span>
-                  <span className={`text-xs ${layout.overflow ? 'text-danger' : 'text-muted'}`}>
-                    {fmtSize(layout.used)} / {fmtSize(layout.limit)}
-                  </span>
-                </div>
-                {/* 偏移可视化条 */}
-                <div className="relative h-6 overflow-hidden rounded bg-panel-2">
-                  {layout.items.map((item, i) => {
-                    const itemHl = hlItem === item.id
-                    return (
-                      <div
-                        key={item.id}
-                        className={`absolute top-0 h-full border-r border-bg/50 transition-all ${itemHl ? 'z-10 ring-2 ring-accent' : ''}`}
-                        style={{
-                          left: `${(item.offset / layout.limit) * 100}%`,
-                          width: `${(item.size / layout.limit) * 100}%`,
-                          background: itemHl ? '#818cf8' : (i % 2 === 0 ? '#3b82f6' : '#6366f1'),
-                          opacity: hlItem && !itemHl ? 0.3 : 1,
-                        }}
-                        title={`${item.label} @ ${hex(item.offset)} (${fmtSize(item.size)})`}
-                        onClick={(e) => { e.stopPropagation(); setHlItem(itemHl ? null : item.id); setHlRegion(region.name) }}
-                      />
-                    )
-                  })}
-                  {layout.gaps.map((gap, i) => (
-                    <div
-                      key={`gap-${i}`}
-                      className="absolute top-0 h-full pad-stripes opacity-30"
-                      style={{
-                        left: `${(gap.start / layout.limit) * 100}%`,
-                        width: `${(gap.size / layout.limit) * 100}%`,
-                      }}
-                      title={`碎片 @ ${hex(gap.start)} (${fmtSize(gap.size)})`}
-                    />
-                  ))}
-                </div>
-                {overflow && (
-                  <div className="mt-1 text-xs text-danger">
-                    ⚠ 溢出 {fmtSize(overflow.overflowBy)} 字节（从 {overflow.itemLabel} 开始）
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
     </div>
   )
 
