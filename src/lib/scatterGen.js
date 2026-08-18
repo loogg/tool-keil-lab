@@ -77,6 +77,8 @@ export function generateLd(model) {
             const name = match[1].replace(/\*/g, '*')
             lines.push(`    KEEP(*(.text.${name}*))`)
           }
+        } else if (item.label.startsWith('.')) {
+          lines.push(`    *(${item.label}*)`)
         } else if (item.label.startsWith('*')) {
           lines.push(`    ${item.label}`)
         } else {
@@ -137,6 +139,8 @@ export function generateIcf(model) {
           if (match) {
             placements.push(`section .text.${match[1]}*`)
           }
+        } else if (item.label.startsWith('.')) {
+          placements.push(`section ${item.label}*`)
         } else if (item.label.startsWith('*')) {
           placements.push(`section ${item.label.replace('*', '').trim()}`)
         } else {
@@ -207,6 +211,14 @@ export function generateScatter(model) {
   }
 
   return lines.join('\n').trim()
+}
+
+// 按内容猜测链接脚本类型：'sct' | 'ld' | 'icf'
+// 编辑框应用时兜底用：即使语法页签没切对，也能选到正确的解析器
+export function detectLinkerSyntax(text) {
+  if (/^\s*define\s+(memory|region)\b/m.test(text)) return 'icf'
+  if (/^\s*MEMORY\b/m.test(text) || /^\s*SECTIONS\b/m.test(text) || /ORIGIN\s*=/.test(text)) return 'ld'
+  return 'sct'
 }
 
 // 简化版 scatter 解析器（覆盖常见语法）
@@ -287,118 +299,158 @@ export function parseScatter(text) {
       }
     }
 
+    if (loadRegions.length === 0 && regions.length === 0) {
+      return { error: '未识别到加载区/执行区，请确认内容为 Keil scatter（.sct）语法' }
+    }
     return { loadRegions, regions, items }
   } catch (e) {
     return { error: e.message }
   }
 }
 
+// ld 数值：0x 十六进制 / 十进制 / K、M 后缀；符号等无法求值时返回 null
+function parseLdSize(value) {
+  if (/^0x[0-9a-fA-F]+$/i.test(value)) return parseInt(value, 16)
+  const m = value.match(/^(\d+)([KkMm])?$/)
+  if (m) {
+    const n = parseInt(m[1], 10)
+    const unit = (m[2] || '').toLowerCase()
+    if (unit === 'k') return n * 1024
+    if (unit === 'm') return n * 1024 * 1024
+    return n
+  }
+  return null
+}
+
 // 解析 GCC ld 语法
+// 一个输出 section（.text/.data/... 块）映射为一个 item，挂在 "> REGION" 指定的 MEMORY 区域下
 export function parseLd(text) {
   try {
-    const lines = text.split('\n')
+    // 去掉 /* */ 与 // 注释，避免行尾注释干扰匹配
+    const cleaned = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    const lines = cleaned.split('\n')
+
     const regions = []
     const items = []
     let inMemory = false
     let inSections = false
-    let currentRegion = null
+    let depth = 0            // SECTIONS 块内的花括号深度
+    let sectionName = null   // 正在解析的输出 section 名（不含开头的点）
+    let sectionAttrs = ''    // NOLOAD / COPY 等类型标记
     let itemId = 0
 
-    for (const line of lines) {
-      const trimmed = line.trim()
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
 
-      // MEMORY {
-      if (trimmed === 'MEMORY' || (trimmed === '{' && inMemory)) {
+      // ---- MEMORY 块 ----
+      if (!inSections && /^MEMORY\b/.test(line)) {
         inMemory = true
         continue
       }
-
-      // } 结束 MEMORY
-      if (trimmed === '}' && inMemory && !inSections) {
-        inMemory = false
-        continue
-      }
-
-      // MEMORY 块内的 region 定义：ER_IROM1 (rx) : ORIGIN = 0x08000000, LENGTH = 0xC0000
       if (inMemory) {
-        const memMatch = trimmed.match(/^(\w+)\s+\((\w+)\)\s*:\s*ORIGIN\s*=\s*(0x[0-9a-fA-F]+),\s*LENGTH\s*=\s*(0x[0-9a-fA-F]+)/)
+        if (line.startsWith('}')) {
+          inMemory = false
+          continue
+        }
+        // 条目：NAME (rx) : ORIGIN = 0x80000000, LENGTH = 256K
+        // 值支持十六进制 / 十进制 / K、M 后缀 / 符号（符号无法求值，走默认大小）
+        const memMatch = line.match(/^([\w$]+)\s*(\(([^)]*)\))?\s*:\s*ORIGIN\s*=\s*([\w$]+)\s*,\s*LENGTH\s*=\s*([\w$]+)/i)
         if (memMatch) {
+          const memAttrs = memMatch[3] || ''
+          const size = parseLdSize(memMatch[5])
           regions.push({
             name: memMatch[1],
-            base: parseInt(memMatch[3], 16),
-            maxSize: parseInt(memMatch[4], 16),
+            base: parseLdSize(memMatch[4]) ?? 0,
+            maxSize: size ?? 0x10000,
             attrs: { fixed: false, uninit: false },
-            kind: memMatch[2].includes('x') ? 'flash' : 'ram',
-            note: '',
+            kind: memAttrs.includes('w') ? 'ram' : 'flash',
+            note: size === null ? `LENGTH=${memMatch[5]}（符号，使用默认大小）` : '',
             loadRegion: 'LR_DEFAULT',
           })
         }
+        continue
       }
 
-      // SECTIONS {
-      if (trimmed === 'SECTIONS' || (trimmed === '{' && !inMemory)) {
+      // ---- SECTIONS 块 ----
+      if (!inSections && /^SECTIONS\b/.test(line)) {
         inSections = true
-        continue
+        depth = 0
+      }
+      if (!inSections) continue
+
+      // SECTIONS 块内深度 1 处识别输出 section 头部行，兼容：
+      //   .text : {                       （最简写法）
+      //   .text ADDR : {                  （带地址表达式）
+      //   .data : AT(LMA) {               （指定 LMA）
+      //   .bss (NOLOAD) : {               （类型标记）
+      //   .eh_frame :（{ 在下一行）
+      if (depth === 1 && sectionName === null) {
+        const hdr = line.match(/^\.([\w$./]+)\s*(\((?:NOLOAD|COPY|INFO|OVERLAY|DSECT)\))?/)
+        if (hdr && line.includes(':')) {
+          sectionName = hdr[1]
+          sectionAttrs = hdr[2] ? hdr[2].replace(/[()]/g, '') : ''
+        }
       }
 
-      // } 结束 SECTIONS
-      if (trimmed === '}' && inSections) {
-        inSections = false
-        currentRegion = null
-        continue
+      // 统计本行花括号，跟踪 section 体的进出
+      let closedHere = false
+      for (const ch of line) {
+        if (ch === '{') depth++
+        else if (ch === '}') {
+          depth--
+          closedHere = true
+        }
       }
 
-      // SECTIONS 块内的 region 定义：.irom1 : { ... } > ER_IROM1
-      if (inSections) {
-        const sectionMatch = trimmed.match(/^\.(\w+)\s*:\s*\{/)
-        if (sectionMatch) {
-          const regionName = sectionMatch[1]
-          // 查找对应的 region（从 MEMORY 中）
-          const matchedRegion = regions.find(r => r.name.toLowerCase() === regionName.toLowerCase() || r.name.toLowerCase().replace(/^(er_|rw_)/, '') === regionName)
-          if (matchedRegion) {
-            currentRegion = matchedRegion
-          } else {
-            // 创建新 region
-            currentRegion = {
-              name: regionName.toUpperCase(),
+      // section 体结束：} > REGION（或 } > VMA AT > LMA，取 VMA）
+      if (closedHere && depth <= 1 && sectionName !== null) {
+        depth = Math.max(depth, 1) // 仍处在 SECTIONS 块内
+        const endMatch = line.match(/\}\s*>\s*([\w$]+)/)
+        let region = null
+        if (endMatch) {
+          region = regions.find((r) => r.name === endMatch[1])
+          if (!region) {
+            region = {
+              name: endMatch[1],
               base: 0,
               maxSize: 0x10000,
               attrs: { fixed: false, uninit: false },
               kind: 'ram',
-              note: '',
+              note: '未在 MEMORY 中定义，使用默认值',
               loadRegion: 'LR_DEFAULT',
             }
-            regions.push(currentRegion)
+            regions.push(region)
           }
         }
-
-        // } > REGION_NAME 或 } > REGION_NAME AT > LOAD_REGION
-        const endMatch = trimmed.match(/^\}\s*>\s*(\w+)/)
-        if (endMatch && currentRegion) {
-          // 更新 region 名称
-          currentRegion.name = endMatch[1]
+        if (region) {
+          items.push({
+            id: `parsed_${itemId++}`,
+            label: `.${sectionName}`,
+            detail: sectionAttrs ? `解析自 ld（${sectionAttrs}）` : '解析自 ld',
+            region: region.name,
+            size: 0x1000,
+            custom: true,
+          })
         }
-
-        // 块内的 item 行
-        if (currentRegion && !trimmed.startsWith('}') && !trimmed.match(/^\.(\w+)\s*:/)) {
-          const label = trimmed.replace(/\/\*.*\*\//, '').trim()
-          if (label && !label.startsWith('/*')) {
-            items.push({
-              id: `parsed_${itemId++}`,
-              label,
-              detail: '解析自 ld',
-              region: currentRegion.name,
-              size: 0x1000,
-              custom: true,
-            })
-          }
-        }
+        sectionName = null
+        sectionAttrs = ''
       }
     }
 
-    // 为每个 region 分配唯一的 loadRegion
-    const loadRegions = [{ name: 'LR_DEFAULT', base: 0, maxSize: 0xFFFFFFFF, note: '默认加载区' }]
-    regions.forEach(r => r.loadRegion = 'LR_DEFAULT')
+    if (regions.length === 0) {
+      return { error: '未识别到 MEMORY 区域，请确认内容为 GCC 链接脚本（.ld）' }
+    }
+
+    // 加载区：覆盖全部 region 的地址范围
+    const minBase = Math.min(...regions.map((r) => r.base))
+    const maxEnd = Math.max(...regions.map((r) => r.base + r.maxSize))
+    const loadRegions = [{
+      name: 'LR_DEFAULT',
+      base: minBase,
+      maxSize: Math.max(maxEnd - minBase, 1),
+      note: '默认加载区',
+    }]
 
     return { loadRegions, regions, items }
   } catch (e) {
@@ -487,6 +539,9 @@ export function parseIcf(text) {
       }
     }
 
+    if (regions.length === 0) {
+      return { error: '未识别到 define region，请确认内容为 IAR 配置（.icf）语法' }
+    }
     return { loadRegions, regions, items }
   } catch (e) {
     return { error: e.message }

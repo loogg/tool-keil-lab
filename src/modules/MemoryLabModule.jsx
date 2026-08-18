@@ -11,7 +11,7 @@ import {
   validateModel,
   PACKEDFS_SECTIONS, selectSections,
 } from '../lib/memoryMap'
-import { generateScatter, generateLd, generateIcf, parseScatter, parseLd, parseIcf } from '../lib/scatterGen'
+import { generateScatter, generateLd, generateIcf, parseScatter, parseLd, parseIcf, detectLinkerSyntax } from '../lib/scatterGen'
 import { MAP_SAMPLE, MAP_NOTES, LINKER_SYNTAX, SYMBOL_EXAMPLE, atSnippet } from '../data/memoryLab'
 
 // 地址十六进制：8 位补零大写
@@ -216,9 +216,23 @@ export default function MemoryLabModule() {
   const hitSet = useMemo(() => new Set(selectSections(filter).map((s) => s.name)), [filter])
   const atSnippets = useMemo(() => atSnippet(addr), [addr])
 
-  // scatter 文本变更 → 尝试解析（根据当前语法调用对应解析器）
+  // 当前语法页签对应的生成文本（编辑模式预填充 / 重置都用它）
+  const currentGeneratedText = syntaxTab === 'ld'
+    ? generateLd(model)
+    : syntaxTab === 'icf'
+    ? generateIcf(model)
+    : generatedScatterText
+
+  // 进入编辑模式：用当前语法的生成结果预填充输入框（避免空白）
+  const enterScatterEdit = () => {
+    setManualScatterText(currentGeneratedText)
+    setScatterEditMode(true)
+  }
+
+  // scatter 文本变更 → 尝试解析（按内容自动识别语法，页签没切对也能解析）
   const applyScatterText = () => {
-    const parser = syntaxTab === 'ld' ? parseLd : syntaxTab === 'icf' ? parseIcf : parseScatter
+    const syntax = detectLinkerSyntax(manualScatterText)
+    const parser = syntax === 'ld' ? parseLd : syntax === 'icf' ? parseIcf : parseScatter
     const result = parser(manualScatterText)
     if (result.error) {
       alert(`解析失败：${result.error}`)
@@ -245,7 +259,7 @@ export default function MemoryLabModule() {
     return () => clearTimeout(timer)
   }, [bootPlaying, bootStep])
 
-  // ---------- 实验① scatter 编辑器（树形面板 + 拖拽） ----------
+  // ---------- 实验① linker 编辑器（树形面板 + 拖拽） ----------
   const [expandedRegions, setExpandedRegions] = useState(() => new Set(regions.map((r) => r.name)))
   const [dragItemId, setDragItemId] = useState(null)
   const [dragOverRegion, setDragOverRegion] = useState(null)
@@ -557,7 +571,7 @@ export default function MemoryLabModule() {
       {/* Scatter 交互式查看器（联动高亮 + 语法切换） */}
       <div>
         <div className="mb-2 flex items-center justify-between">
-          <SectionLabel>scatter 文件</SectionLabel>
+          <SectionLabel>linker 文件</SectionLabel>
           <div className="flex items-center gap-2">
             <Segmented
               options={[
@@ -568,7 +582,7 @@ export default function MemoryLabModule() {
               value={syntaxTab}
               onChange={setSyntaxTab}
             />
-            <Button variant="ghost" onClick={() => setScatterEditMode(!scatterEditMode)}>
+            <Button variant="ghost" onClick={() => scatterEditMode ? setScatterEditMode(false) : enterScatterEdit()}>
               {scatterEditMode ? '预览' : '编辑'}
             </Button>
           </div>
@@ -584,7 +598,7 @@ export default function MemoryLabModule() {
             />
             <div className="mt-2 flex gap-2">
               <Button variant="primary" onClick={applyScatterText}>应用</Button>
-              <Button variant="ghost" onClick={() => setScatterEditMode(false)}>重置</Button>
+              <Button variant="ghost" onClick={() => setManualScatterText(currentGeneratedText)} title="恢复为当前模型的生成文本">重置</Button>
             </div>
           </div>
         ) : syntaxTab === 'sct' ? (
@@ -900,9 +914,9 @@ export default function MemoryLabModule() {
   return (
     <Workbench
       title="内存布局实验室"
-      tagline="scatter 文件决定每段代码和数据落在哪块 Flash / RAM"
+      tagline="链接脚本决定每段代码和数据落在哪块 Flash / RAM"
       experiments={[
-        { id: 'scatter', label: 'scatter 编辑', control: scatterControl, canvas: scatterCanvas },
+        { id: 'scatter', label: 'linker 编辑', control: scatterControl, canvas: scatterCanvas },
         { id: 'filter', label: '筛选器', control: filterControl, canvas: filterCanvas },
         { id: 'boot', label: '启动搬运', control: bootControl, canvas: bootCanvas },
         { id: 'symbol', label: '符号语法', control: symbolControl, canvas: symbolCanvas },
