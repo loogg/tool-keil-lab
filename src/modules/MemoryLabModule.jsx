@@ -20,6 +20,7 @@ import { MAP_SAMPLE, MAP_NOTES, LINKER_SYNTAX, SYMBOL_EXAMPLE, atSnippet } from 
 
 // 地址十六进制：8 位补零大写
 const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(8, '0')
+const SYNTAX_LABEL = { sct: 'Keil .sct', ld: 'GCC .ld', icf: 'IAR .icf' }
 const fmtSize = (n) => n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n % 1024 ? 1 : 0)} KB`
 const fmtKB = (n) => `${n / 1024} KB`
 
@@ -480,8 +481,10 @@ export default function MemoryLabModule() {
   const [manualScatterText, setManualScatterText] = useState('')
   // 手动文本已被编辑/粘贴且尚未应用：为 true 时切换编辑/预览不得覆盖原文
   const [manualDirty, setManualDirty] = useState(false)
-  // 原文预览模式：应用成功后预览直接展示用户粘贴的原文，解析结果映射回原文行做高亮
-  const [manualApplied, setManualApplied] = useState(false)
+  // 已应用的原文及其语法：原文只在自己的语法页签展示（可点行联动高亮），
+  // 切到其它页签则展示按模型生成的对应格式——三种格式互切同步
+  const [origText, setOrigText] = useState('')
+  const [origSyntax, setOrigSyntax] = useState('')
 
   // scatter 文本：非编辑模式时自动生成
   const generatedScatterText = useMemo(() => generateScatter(model), [model])
@@ -527,7 +530,8 @@ export default function MemoryLabModule() {
     setModel(sceneObj.modelFn())
     setManualScatterText('')
     setManualDirty(false)
-    setManualApplied(false)
+    setOrigText('')
+    setOrigSyntax('')
     setScatterEditMode(false)
     setBootStep(-1)
   }
@@ -545,17 +549,20 @@ export default function MemoryLabModule() {
     ? generateIcf(model)
     : generatedScatterText
 
-  // 进入编辑模式：原文预览模式下保留原文；否则仅在没有未应用的手动文本时预填充（避免空白）。
-  // 已粘贴/编辑过的文本在 编辑⇄预览 切换中保持原样，不会被覆盖
+  // 进入编辑模式：有未应用的手动文本 → 保留；当前页签就是原文语法 → 用原文；
+  // 否则按当前页签的生成文本预填充（避免空白）
   const enterScatterEdit = () => {
-    if (!manualDirty && !manualApplied) setManualScatterText(currentGeneratedText)
+    if (!manualDirty && !(origText && syntaxTab === origSyntax)) {
+      setManualScatterText(currentGeneratedText)
+    }
     setScatterEditMode(true)
   }
 
-  // 用户改动模型（拖拽 / 增删 region、section / FIXED 地址）→ 退出原文预览，回到生成视图
+  // 用户改动模型（拖拽 / 增删 region、section / FIXED 地址）→ 原文已不能描述模型，退出原文模式
   const changeModel = (newModel) => {
     setModel(newModel)
-    setManualApplied(false)
+    setOrigText('')
+    setOrigSyntax('')
   }
 
   // scatter 文本变更 → 尝试解析（按内容自动识别语法，页签没切对也能解析）
@@ -575,9 +582,11 @@ export default function MemoryLabModule() {
     }
     setModel(newModel)
     setSyntaxTab(syntax) // 语法页签与粘贴内容保持一致
-    // 保留原文：预览进入原文模式，解析出的 region/section 映射回原文行高亮
+    // 保留原文及其语法：该页签预览显示原文（解析结果映射回原文行高亮），
+    // 其它页签显示按模型生成的对应格式
     setManualDirty(false)
-    setManualApplied(true)
+    setOrigText(manualScatterText)
+    setOrigSyntax(syntax)
     setScatterEditMode(false)
   }
 
@@ -593,15 +602,24 @@ export default function MemoryLabModule() {
   }, [bootPlaying, bootStep])
 
   // ---------- 实验① linker 编辑器（树形面板 + 拖拽） ----------
-  const [expandedRegions, setExpandedRegions] = useState(() => new Set(regions.map((r) => r.name)))
+  // 树默认全部展开，集合只记录被用户显式折叠的名字（粘贴解析出的新 region/LR 默认可见）
+  const [collapsedRegions, setCollapsedRegions] = useState(() => new Set())
+  const [collapsedLRs, setCollapsedLRs] = useState(() => new Set())
   const [dragItemId, setDragItemId] = useState(null)
   const [dragOverRegion, setDragOverRegion] = useState(null)
 
   const toggleRegion = (name) => {
-    const next = new Set(expandedRegions)
+    const next = new Set(collapsedRegions)
     if (next.has(name)) next.delete(name)
     else next.add(name)
-    setExpandedRegions(next)
+    setCollapsedRegions(next)
+  }
+
+  const toggleLR = (name) => {
+    const next = new Set(collapsedLRs)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    setCollapsedLRs(next)
   }
 
   const handleDragStart = (itemId) => {
@@ -683,8 +701,7 @@ export default function MemoryLabModule() {
         maxSize: parseInt(newRegionSizeInline, 16),
         attrs: newRegionAttrsInline,
       }))
-      // 新 region 自动展开，方便继续添加 section
-      setExpandedRegions(new Set([...expandedRegions, newRegionNameInline]))
+      // 新 region 默认就是展开态（collapsed 集合不含它），可直接继续添加 section
     }
     setAddingRegion(false)
   }
@@ -702,15 +719,40 @@ export default function MemoryLabModule() {
         />
       </div>
 
-      {/* 树形结构：Region → Sections */}
-      <div className="space-y-1">
-        {regions.map((region) => {
-          const regionItems = model.items.filter((i) => i.region === region.name)
-          const isExpanded = expandedRegions.has(region.name)
-          const isDragOver = dragOverRegion === region.name
+      {/* 树形结构：加载区 → Region → Sections（三层，与 scatter 的 LR/ER 结构一致） */}
+      <div className="space-y-1.5">
+        {(() => {
+          const lrGroups = {}
+          for (const region of regions) {
+            const lr = region.loadRegion || (model.loadRegions?.[0]?.name) || 'LR_DEFAULT'
+            if (!lrGroups[lr]) lrGroups[lr] = []
+            lrGroups[lr].push(region)
+          }
+          return Object.entries(lrGroups).map(([lrName, lrRegions]) => {
+            const lr = (model.loadRegions || []).find((l) => l.name === lrName)
+            const lrExpanded = !collapsedLRs.has(lrName)
+            return (
+              <div key={lrName}>
+                {/* 加载区行：只负责展开/折叠，不参与高亮 */}
+                <div
+                  className="flex items-center gap-2 rounded px-2 py-1.5 cursor-pointer hover:bg-panel-2 transition-colors"
+                  onClick={() => toggleLR(lrName)}
+                  title="加载区（Load Region）"
+                >
+                  <span className={`text-[10px] text-muted transition-transform ${lrExpanded ? 'rotate-90' : ''}`}>▶</span>
+                  <span className="font-mono text-xs font-semibold text-muted">{lrName}</span>
+                  {lr && <span className="text-[10px] text-muted">{hex(lr.base)} · {fmtSize(lr.maxSize)}</span>}
+                  <span className="ml-auto text-[10px] text-muted">{lrRegions.length} regions</span>
+                </div>
+                {lrExpanded && (
+                  <div className="mt-1 ml-3 space-y-1">
+                    {lrRegions.map((region) => {
+                      const regionItems = model.items.filter((i) => i.region === region.name)
+                      const isExpanded = !collapsedRegions.has(region.name)
+                      const isDragOver = dragOverRegion === region.name
 
-          return (
-            <div key={region.name} className="rounded-lg border border-line bg-panel overflow-hidden">
+                      return (
+                        <div key={region.name} className="rounded-lg border border-line bg-panel overflow-hidden">
               {/* Region 行 */}
               <div
                 className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
@@ -835,11 +877,17 @@ export default function MemoryLabModule() {
                       + 添加 section...
                     </button>
                   )}
-                </div>
-              )}
-            </div>
-          )
-        })}
+                        </div>
+                      )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })
+        })()}
 
         {/* 添加 Region */}
         {addingRegion ? (
@@ -893,17 +941,31 @@ export default function MemoryLabModule() {
 
   const scatterCanvas = (
     <div className="space-y-4">
-      {!scatterEditMode && manualApplied && manualScatterText && (
+      {!scatterEditMode && origText && syntaxTab === origSyntax && (
         <div className="flex items-center gap-2 rounded border border-accent-2/40 bg-accent-2/10 px-3 py-2 text-xs text-accent-2">
           <span className="flex-1">
             ⓘ 正在显示原文（识别 {model.regions.length} 个 region / {model.items.length} 个 section，点击行可联动高亮；section 大小默认 4KB，可在左侧树调整）
           </span>
           <button
             type="button"
-            onClick={() => setManualApplied(false)}
+            onClick={() => { setOrigText(''); setOrigSyntax('') }}
             className="shrink-0 rounded border border-accent-2/40 px-2 py-0.5 transition-colors hover:bg-accent-2/20"
           >
             返回生成视图
+          </button>
+        </div>
+      )}
+      {!scatterEditMode && origText && syntaxTab !== origSyntax && (
+        <div className="flex items-center gap-2 rounded border border-line bg-panel-2 px-3 py-2 text-xs text-muted">
+          <span className="flex-1">
+            ⓘ 当前显示按模型生成的 {SYNTAX_LABEL[syntaxTab]} 文本；粘贴的原文（{SYNTAX_LABEL[origSyntax]}）仍保留，切回该页签可查看
+          </span>
+          <button
+            type="button"
+            onClick={() => setSyntaxTab(origSyntax)}
+            className="shrink-0 rounded border border-line px-2 py-0.5 transition-colors hover:border-accent hover:text-accent"
+          >
+            查看原文
           </button>
         </div>
       )}
@@ -943,12 +1005,12 @@ export default function MemoryLabModule() {
             />
             <div className="mt-2 flex gap-2">
               <Button variant="primary" onClick={applyScatterText}>应用</Button>
-              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false); setManualApplied(false) }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
+              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false); setOrigText(''); setOrigSyntax('') }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
             </div>
           </div>
-        ) : manualApplied && manualScatterText ? (
+        ) : origText && syntaxTab === origSyntax ? (
           <ManualTextView
-            text={manualScatterText}
+            text={origText}
             model={model}
             hlRegion={hlRegion}
             hlItem={hlItem}
