@@ -3,7 +3,7 @@ import { createDefaultModel } from './memoryMap.js'
 import {
   generateScatter, generateLd, generateIcf,
   parseScatter, parseLd, parseIcf,
-  detectLinkerSyntax,
+  detectLinkerSyntax, ldItemLines, icfItemPlacements,
 } from './scatterGen.js'
 
 // 真实 GCC 链接脚本的常见写法（参考 HPMicro SDK user_linker.ld）：
@@ -186,5 +186,22 @@ describe('detectLinkerSyntax（按内容自动识别语法）', () => {
     expect(detectLinkerSyntax(REAL_LD)).toBe('ld')
     expect(detectLinkerSyntax('define memory mem with size = 4G;\ndefine region IROM = mem:[from 0x08000000 size 768K];')).toBe('icf')
     expect(detectLinkerSyntax('LR_IROM1 0x08000000 0x00100000 {\n  ER_IROM1 0x08000000 0x000C0000 {\n  }\n}')).toBe('sct')
+  })
+})
+
+describe('ld/icf item 行映射（生成器与交互视图共用）', () => {
+  it('ldItemLines 按 label 类型展开', () => {
+    expect(ldItemLines({ label: '*.o (RESET, +First)' })).toEqual(['KEEP(*(.isr_vector))'])
+    expect(ldItemLines({ label: '.ANY (+RW +ZI)' })).toEqual(['*(.data*)', '*(.bss*) *(COMMON)'])
+    expect(ldItemLines({ label: 'mongoose.o (+RO)' })).toEqual(['KEEP(*(.text.mongoose*))'])
+    expect(ldItemLines({ label: '.text' })).toEqual(['*(.text*)'])
+    expect(ldItemLines({ label: '* (.bss.ccram)' })).toEqual(['* (.bss.ccram)'])
+  })
+
+  it('icfItemPlacements 按 label 类型展开', () => {
+    expect(icfItemPlacements({ label: '*.o (RESET, +First)' })).toEqual(['vector'])
+    expect(icfItemPlacements({ label: '.ANY (+RO)' })).toEqual(['readonly'])
+    expect(icfItemPlacements({ label: '.ANY (+RW +ZI)' })).toEqual(['readwrite', 'block ZI'])
+    expect(icfItemPlacements({ label: '.text' })).toEqual(['section .text*'])
   })
 })

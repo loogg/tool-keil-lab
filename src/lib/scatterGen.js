@@ -26,6 +26,49 @@ function customItemLines(item) {
   return [`    ${item.label}`]
 }
 
+// item → ld 输入段行（不带缩进）；一个 item 可能展开成多行（如 .ANY (+RW +ZI)）
+// 生成器与交互式视图共用，保证「看到的行」与「生成的文本」一致
+export function ldItemLines(item) {
+  if (item.label.includes('RESET')) return ['KEEP(*(.isr_vector))']
+  if (item.label.includes('.ANY')) {
+    const parts = []
+    if (item.label.includes('+RO')) parts.push('*(.text*) *(.rodata*)')
+    if (item.label.includes('+RW')) parts.push('*(.data*)')
+    if (item.label.includes('+ZI')) parts.push('*(.bss*) *(COMMON)')
+    return parts
+  }
+  if (item.label.includes('.o')) {
+    // 提取 .o 文件名
+    const match = item.label.match(/([\w.]+)\.o/)
+    if (match) return [`KEEP(*(.text.${match[1].replace(/\*/g, '*')}*))`]
+    return []
+  }
+  if (item.label.startsWith('.')) return [`*(${item.label}*)`]
+  if (item.label.startsWith('*')) return [item.label]
+  return [`*(.${item.label})`]
+}
+
+// item → icf placement 列表；一个 item 可能对应多个 placement（如 .ANY (+RW +ZI)）
+export function icfItemPlacements(item) {
+  if (item.label.includes('RESET')) return ['vector']
+  if (item.label.includes('.ANY')) {
+    const parts = []
+    if (item.label.includes('+RO')) parts.push('readonly')
+    if (item.label.includes('+RW')) parts.push('readwrite')
+    if (item.label.includes('+ZI')) parts.push('block ZI')
+    return parts
+  }
+  if (item.label.includes('.o')) {
+    // 提取 .o 文件名
+    const match = item.label.match(/([\w.]+)\.o/)
+    if (match) return [`section .text.${match[1]}*`]
+    return []
+  }
+  if (item.label.startsWith('.')) return [`section ${item.label}*`]
+  if (item.label.startsWith('*')) return [`section ${item.label.replace('*', '').trim()}`]
+  return [`section .${item.label}`]
+}
+
 // 生成 GCC 链接脚本 (.ld)
 export function generateLd(model) {
   const lines = []
@@ -63,27 +106,7 @@ export function generateLd(model) {
       const sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
       lines.push(`  ${sectionName} : {`)
       for (const item of items) {
-        // 尝试从 label 推断 ld 语法
-        if (item.label.includes('RESET')) {
-          lines.push('    KEEP(*(.isr_vector))')
-        } else if (item.label.includes('.ANY')) {
-          if (item.label.includes('+RO')) lines.push('    *(.text*) *(.rodata*)')
-          if (item.label.includes('+RW')) lines.push('    *(.data*)')
-          if (item.label.includes('+ZI')) lines.push('    *(.bss*) *(COMMON)')
-        } else if (item.label.includes('.o')) {
-          // 提取 .o 文件名
-          const match = item.label.match(/([\w.]+)\.o/)
-          if (match) {
-            const name = match[1].replace(/\*/g, '*')
-            lines.push(`    KEEP(*(.text.${name}*))`)
-          }
-        } else if (item.label.startsWith('.')) {
-          lines.push(`    *(${item.label}*)`)
-        } else if (item.label.startsWith('*')) {
-          lines.push(`    ${item.label}`)
-        } else {
-          lines.push(`    *(.${item.label})`)
-        }
+        for (const line of ldItemLines(item)) lines.push(`    ${line}`)
       }
       lines.push(`  } > ${region.name}`)
       lines.push('')
@@ -127,25 +150,7 @@ export function generateIcf(model) {
     } else {
       const placements = []
       for (const item of items) {
-        if (item.label.includes('RESET')) {
-          placements.push('vector')
-        } else if (item.label.includes('.ANY')) {
-          if (item.label.includes('+RO')) placements.push('readonly')
-          if (item.label.includes('+RW')) placements.push('readwrite')
-          if (item.label.includes('+ZI')) placements.push('block ZI')
-        } else if (item.label.includes('.o')) {
-          // 提取 .o 文件名
-          const match = item.label.match(/([\w.]+)\.o/)
-          if (match) {
-            placements.push(`section .text.${match[1]}*`)
-          }
-        } else if (item.label.startsWith('.')) {
-          placements.push(`section ${item.label}*`)
-        } else if (item.label.startsWith('*')) {
-          placements.push(`section ${item.label.replace('*', '').trim()}`)
-        } else {
-          placements.push(`section .${item.label}`)
-        }
+        placements.push(...icfItemPlacements(item))
       }
       lines.push(`place in ${region.name} { ${placements.join(', ')} };`)
     }

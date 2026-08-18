@@ -11,7 +11,11 @@ import {
   validateModel,
   PACKEDFS_SECTIONS, selectSections,
 } from '../lib/memoryMap'
-import { generateScatter, generateLd, generateIcf, parseScatter, parseLd, parseIcf, detectLinkerSyntax } from '../lib/scatterGen'
+import {
+  generateScatter, generateLd, generateIcf,
+  parseScatter, parseLd, parseIcf, detectLinkerSyntax,
+  ldItemLines, icfItemPlacements,
+} from '../lib/scatterGen'
 import { MAP_SAMPLE, MAP_NOTES, LINKER_SYNTAX, SYMBOL_EXAMPLE, atSnippet } from '../data/memoryLab'
 
 // 地址十六进制：8 位补零大写
@@ -165,6 +169,155 @@ function SectionAttrButton({ attr, selected, onClick }) {
   )
 }
 
+// GCC .ld 交互视图：MEMORY/SECTIONS 逐行点击，与左侧树 / Region 占用联动高亮
+// 行内容与 generateLd 一致（含 region 行、item 行），仅额外提供点击高亮
+function LdInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setHlItem }) {
+  const clickRegion = (name) => { setHlRegion(hlRegion === name ? null : name); setHlItem(null) }
+  const clickItem = (itemId, regionName) => { setHlItem(hlItem === itemId ? null : itemId); setHlRegion(regionName) }
+  const regionClass = (name) =>
+    `cursor-pointer rounded px-2 py-0.5 transition-colors ${
+      hlRegion === name ? 'bg-accent/20 text-accent' : 'text-ink hover:bg-panel-2'
+    }`
+
+  // 与 generateLd 相同的分组与遍历顺序
+  const lrGroups = {}
+  for (const region of regions) {
+    const lr = region.loadRegion || 'LR_DEFAULT'
+    if (!lrGroups[lr]) lrGroups[lr] = []
+    lrGroups[lr].push(region)
+  }
+
+  return (
+    <div className="rounded-lg border border-line bg-code p-3 font-mono text-xs">
+      <div className="text-ink/60">MEMORY</div>
+      <div className="text-ink/60">{'{'}</div>
+      {regions.map((region) => (
+        <div key={region.name} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+          {`  ${region.name} (${region.kind === 'flash' ? 'rx' : 'rwx'}) : ORIGIN = ${hex(region.base)}, LENGTH = 0x${region.maxSize.toString(16).toUpperCase()}`}
+        </div>
+      ))}
+      <div className="text-ink/60">{'}'}</div>
+      <div className="mt-3 text-ink/60">SECTIONS</div>
+      <div className="text-ink/60">{'{'}</div>
+      {Object.values(lrGroups).flatMap((lrRegions) =>
+        lrRegions.map((region) => {
+          const items = model.items.filter((i) => i.region === region.name)
+          if (items.length === 0) return null
+          const sectionName = region.name.toLowerCase().replace(/^(er_|rw_)/, '.')
+          return (
+            <div key={region.name} className="mt-1">
+              <div className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+                {`  .${sectionName} : {`}
+              </div>
+              {items.map((item) =>
+                ldItemLines(item).map((line, li) => (
+                  <div
+                    key={`${item.id}-${li}`}
+                    className={`cursor-pointer rounded px-2 py-0.5 transition-colors ${
+                      hlItem === item.id ? 'bg-accent/20 text-accent' : 'text-ink/80 hover:bg-panel-2'
+                    }`}
+                    style={{ paddingLeft: '2.5rem' }}
+                    onClick={() => clickItem(item.id, region.name)}
+                  >
+                    {line}
+                  </div>
+                ))
+              )}
+              <div className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+                {`  } > ${region.name}`}
+              </div>
+            </div>
+          )
+        })
+      )}
+      <div className="text-ink/60">{'}'}</div>
+    </div>
+  )
+}
+
+// IAR .icf 交互视图：define region / place in 行点击高亮，placement 按 section 粒度可点
+function IcfInteractiveView({ model, regions, hlRegion, hlItem, setHlRegion, setHlItem }) {
+  const clickRegion = (name) => { setHlRegion(hlRegion === name ? null : name); setHlItem(null) }
+  const clickItem = (itemId, regionName) => { setHlItem(hlItem === itemId ? null : itemId); setHlRegion(regionName) }
+  const regionClass = (name) =>
+    `cursor-pointer rounded px-2 py-0.5 transition-colors ${
+      hlRegion === name ? 'bg-accent/20 text-accent' : 'text-ink hover:bg-panel-2'
+    }`
+
+  const uninitRegions = regions.filter((r) => r.attrs.uninit)
+
+  return (
+    <div className="rounded-lg border border-line bg-code p-3 font-mono text-xs">
+      <div className="text-ink/60">define memory mem with size = 4G;</div>
+      <div className="mt-3">
+        {regions.map((region) => {
+          const attrs = []
+          if (region.attrs.fixed) attrs.push('FIXED')
+          if (region.attrs.uninit) attrs.push('UNINIT')
+          const attrStr = attrs.length > 0 ? ` // ${attrs.join(', ')}` : ''
+          return (
+            <div key={region.name} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+              {`define region ${region.name} = mem:[from ${hex(region.base)} size 0x${region.maxSize.toString(16).toUpperCase()}];${attrStr}`}
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-3">
+        {regions.map((region) => {
+          const items = model.items.filter((i) => i.region === region.name)
+          if (items.length === 0) {
+            return (
+              <div key={region.name} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+                {`place in ${region.name} { ${region.kind === 'flash' ? 'readonly' : 'readwrite'} };`}
+              </div>
+            )
+          }
+          return (
+            <div
+              key={region.name}
+              className={`rounded px-2 py-0.5 transition-colors ${hlRegion === region.name ? 'bg-accent/20' : 'hover:bg-panel-2'}`}
+            >
+              <span
+                className={`cursor-pointer ${hlRegion === region.name ? 'text-accent' : 'text-ink'}`}
+                onClick={() => clickRegion(region.name)}
+              >
+                {`place in ${region.name} { `}
+              </span>
+              {items.map((item, idx) => (
+                <span key={item.id}>
+                  <span
+                    className={`cursor-pointer rounded ${
+                      hlItem === item.id
+                        ? 'bg-accent/20 text-accent'
+                        : hlRegion === region.name
+                        ? 'text-accent/80 hover:text-accent'
+                        : 'text-ink/80 hover:text-accent'
+                    }`}
+                    onClick={() => clickItem(item.id, region.name)}
+                  >
+                    {icfItemPlacements(item).join(', ')}
+                  </span>
+                  {idx < items.length - 1 && <span className="text-ink/60">, </span>}
+                </span>
+              ))}
+              <span className={hlRegion === region.name ? 'text-accent' : 'text-ink'}>{' };'}</span>
+            </div>
+          )
+        })}
+      </div>
+      {uninitRegions.length > 0 && (
+        <div className="mt-3">
+          {uninitRegions.map((region) => (
+            <div key={region.name} className={regionClass(region.name)} onClick={() => clickRegion(region.name)}>
+              {`do not initialize { section .bss.${region.name.toLowerCase()}* };`}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function MemoryLabModule() {
   // 核心状态
   const [scene, setScene] = useState('default')
@@ -173,6 +326,10 @@ export default function MemoryLabModule() {
   // 编辑状态
   const [scatterEditMode, setScatterEditMode] = useState(false)
   const [manualScatterText, setManualScatterText] = useState('')
+  // 手动文本已被编辑/粘贴且尚未应用：为 true 时切换编辑/预览不得覆盖原文
+  const [manualDirty, setManualDirty] = useState(false)
+  // 应用成功后的提示（解释预览文本为重新生成）
+  const [applyNotice, setApplyNotice] = useState('')
 
   // scatter 文本：非编辑模式时自动生成
   const generatedScatterText = useMemo(() => generateScatter(model), [model])
@@ -206,6 +363,8 @@ export default function MemoryLabModule() {
     setScene(sceneId)
     setModel(sceneObj.modelFn())
     setManualScatterText('')
+    setManualDirty(false)
+    setApplyNotice('')
     setScatterEditMode(false)
     setBootStep(-1)
   }
@@ -223,9 +382,11 @@ export default function MemoryLabModule() {
     ? generateIcf(model)
     : generatedScatterText
 
-  // 进入编辑模式：用当前语法的生成结果预填充输入框（避免空白）
+  // 进入编辑模式：仅在没有未应用的手动文本时预填充（避免空白）；
+  // 已粘贴/编辑过的文本在 编辑⇄预览 切换中保持原样，不会被覆盖
   const enterScatterEdit = () => {
-    setManualScatterText(currentGeneratedText)
+    if (!manualDirty) setManualScatterText(currentGeneratedText)
+    setApplyNotice('')
     setScatterEditMode(true)
   }
 
@@ -245,7 +406,11 @@ export default function MemoryLabModule() {
       loadRegions: result.loadRegions,
     }
     setModel(newModel)
+    setSyntaxTab(syntax) // 预览格式与粘贴内容保持一致
+    setManualScatterText('') // 下次进入编辑按新模型重新填充
+    setManualDirty(false)
     setScatterEditMode(false)
+    setApplyNotice('已解析并应用到模型。预览文本由模型重新生成：原文中的注释、符号表达式等无法保留；各 section 大小默认 4KB，可在左侧树中调整。')
   }
 
   // 启动搬运自动播放（用 ref 避免 effect 内同步 setState）
@@ -562,6 +727,11 @@ export default function MemoryLabModule() {
 
   const scatterCanvas = (
     <div className="space-y-4">
+      {applyNotice && (
+        <div className="rounded border border-accent-2/40 bg-accent-2/10 px-3 py-2 text-xs text-accent-2">
+          ⓘ {applyNotice}
+        </div>
+      )}
       {errors.length > 0 && (
         <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
           {errors.map((e, i) => <div key={i}>⚠ {e}</div>)}
@@ -591,14 +761,14 @@ export default function MemoryLabModule() {
           <div>
             <textarea
               value={scatterText}
-              onChange={(e) => setManualScatterText(e.target.value)}
+              onChange={(e) => { setManualScatterText(e.target.value); setManualDirty(true) }}
               className="w-full rounded border border-line bg-code p-2 font-mono text-xs text-ink"
               rows={12}
               spellCheck={false}
             />
             <div className="mt-2 flex gap-2">
               <Button variant="primary" onClick={applyScatterText}>应用</Button>
-              <Button variant="ghost" onClick={() => setManualScatterText(currentGeneratedText)} title="恢复为当前模型的生成文本">重置</Button>
+              <Button variant="ghost" onClick={() => { setManualScatterText(currentGeneratedText); setManualDirty(false) }} title="丢弃手动修改，恢复为当前模型的生成文本">重置</Button>
             </div>
           </div>
         ) : syntaxTab === 'sct' ? (
@@ -664,10 +834,23 @@ export default function MemoryLabModule() {
               })
             })()}
           </div>
+        ) : syntaxTab === 'ld' ? (
+          <LdInteractiveView
+            model={model}
+            regions={regions}
+            hlRegion={hlRegion}
+            hlItem={hlItem}
+            setHlRegion={setHlRegion}
+            setHlItem={setHlItem}
+          />
         ) : (
-          <CodeBlock
-            title={syntaxTab === 'ld' ? 'GCC 链接脚本 (.ld)' : 'IAR 配置 (.icf)'}
-            code={syntaxTab === 'ld' ? generateLd(model) : generateIcf(model)}
+          <IcfInteractiveView
+            model={model}
+            regions={regions}
+            hlRegion={hlRegion}
+            hlItem={hlItem}
+            setHlRegion={setHlRegion}
+            setHlItem={setHlItem}
           />
         )}
       </div>
